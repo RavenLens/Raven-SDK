@@ -1,0 +1,21 @@
+{
+  "name": "raven-adk",
+  "version": "1.0.0",
+  "description": "",
+  "main": "dist/index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/RavenLens/Raven-SDK.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/RavenLens/Raven-SDK/issues"
+  },
+  "homepage": "https://github.com/RavenLens/Raven-SDK#readme"
+}
