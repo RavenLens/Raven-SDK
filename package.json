@@ -1,21 +1,30 @@
 {
   "name": "raven-adk",
-  "version": "1.0.0",
-  "description": "",
+  "version": "0.0.1",
+  "description": "Raven AI Agents Developement Kit. For fast, smart agents developed in fraction of time of other libraries. Designed for delightfull UI assemblies georgeous UX",
   "main": "dist/index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "build": "tsc"
   },
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/RavenLens/Raven-SDK.git"
-  },
-  "keywords": [],
-  "author": "",
+  "keywords": [
+    "AI",
+    "ai",
+    "agents",
+    "ai agents",
+    "raven",
+    "raven agents",
+    "ravenlens",
+    "ravenalliance"
+  ],
+  "author": "Michał Szczepański (kotekpsotek)",
   "license": "ISC",
   "type": "commonjs",
   "bugs": {
     "url": "https://github.com/RavenLens/Raven-SDK/issues"
   },
-  "homepage": "https://github.com/RavenLens/Raven-SDK#readme"
+  "homepage": "https://github.com/RavenLens/Raven-SDK#readme",
+  "dependencies": {
+    "vitest": "^4.1.5"
+  }
 }
