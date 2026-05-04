@@ -5,10 +5,10 @@ export enum GraphMarkers {
 
 interface GraphNodeExecutionResult<GraphState extends Record<string, any>> {
     stateUpdate?: GraphState;
-    callNode?: string;
+    callNode?: NodeEdgeIdDistribution;
 }
 
-type NodeLogic<GraphState extends Record<string, any>> = (fromNodeId: string, graphState: GraphState) => GraphNodeExecutionResult<GraphState> | Promise<GraphNodeExecutionResult<GraphState>> | undefined;
+type NodeLogic<GraphState extends Record<string, any>> = (graphState: GraphState, nodeId: string) => GraphNodeExecutionResult<GraphState> | Promise<GraphNodeExecutionResult<GraphState> | undefined> | undefined;
 
 interface GraphEvents<GraphState extends Record<string, any>> {
     node_start: (nodeId: string, state: GraphState) => void | Promise<void>;
@@ -16,34 +16,228 @@ interface GraphEvents<GraphState extends Record<string, any>> {
     state_change: (nodeId: string, stateBefore: GraphState, stateAfter: GraphState) => void | Promise<void>;
 }
 
+type NodeEdgeIdDistribution = string | string[];
+interface EdgeOptions {
+    asynchronous?: boolean;
+}
+
+interface NodeEdgeConnection {
+    from: string[];
+    to: string[];
+    options: EdgeOptions;
+}
+
 export class Graph<GraphState extends Record<string, any>> {
     private NodesLogic: Record<string, NodeLogic<GraphState>> = {};
-    private NodesEdgeConnections: [string, string][] = [];
+    private NodesEdgeConnections: NodeEdgeConnection[] = [];
+    private EdgeSyncWatermarks: Record<string, number>[] = [];
+    private NodeCompletionCounts: Record<string, number> = {};
+    private HasReachedEnd = false;
     private EventsListeners: Record<string, (...args: any[]) => void | Promise<void>> = {};
     graphState: GraphState;
     
     constructor(graphState: GraphState) {
         this.graphState = graphState;
     }
-    
-    addNode(nodeId: string, logic: NodeLogic<GraphState>) {
-        this.NodesLogic[nodeId] = logic;
+
+    private normalizeDistribution(nodeDistribution: NodeEdgeIdDistribution): string[] {
+        const normalized = Array.isArray(nodeDistribution) ? nodeDistribution : [nodeDistribution];
+
+        if (normalized.length === 0) {
+            throw("Node edge distribution cannot be empty");
+        }
+
+        return normalized;
     }
 
-    addEdge(fromNodeId: string, toNodeId: string) {
-        this.NodesEdgeConnections = [
-            ...this.NodesEdgeConnections,
-            [fromNodeId, toNodeId]
-        ];
+    private getNodeCompletionCount(nodeId: string): number {
+        return this.NodeCompletionCounts[nodeId] ?? 0;
     }
 
-    onEvent<EventName extends keyof GraphEvents<GraphState>>(eventName: EventName, eventListener: GraphEvents<GraphState>[EventName]) {
-        if (this.EventsListeners[eventName]) {
-            console.warn(`Event listener for "${eventName}" is already registered. Only one listener per event name is allowed.`);
+    private incrementNodeCompletion(nodeId: string): void {
+        this.NodeCompletionCounts[nodeId] = this.getNodeCompletionCount(nodeId) + 1;
+    }
+
+    private updateEdgeWatermark(edgeIndex: number): void {
+        const edge = this.NodesEdgeConnections[edgeIndex];
+        const edgeWatermark = this.EdgeSyncWatermarks[edgeIndex];
+
+        for (const fromNodeId of edge.from) {
+            edgeWatermark[fromNodeId] = this.getNodeCompletionCount(fromNodeId);
+        }
+    }
+
+    private shouldTriggerEdge(edgeIndex: number): boolean {
+        const edge = this.NodesEdgeConnections[edgeIndex];
+
+        if (edge.options.asynchronous) {
+            return true;
+        }
+
+        const edgeWatermark = this.EdgeSyncWatermarks[edgeIndex];
+
+        for (const fromNodeId of edge.from) {
+            const completionCount = this.getNodeCompletionCount(fromNodeId);
+            const watermark = edgeWatermark[fromNodeId] ?? 0;
+
+            if (completionCount <= watermark) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private enqueueEdgeTargets(queue: string[], targets: string[]): void {
+        for (const nodeId of targets) {
+            if (nodeId === GraphMarkers.END) {
+                this.HasReachedEnd = true;
+                continue;
+            }
+
+            queue.push(nodeId);
+        }
+    }
+
+    private processOutgoingEdges(completedNodeId: string, queue: string[]): void {
+        for (let edgeIndex = 0; edgeIndex < this.NodesEdgeConnections.length; edgeIndex += 1) {
+            const edge = this.NodesEdgeConnections[edgeIndex];
+
+            if (!edge.from.includes(completedNodeId)) {
+                continue;
+            }
+
+            if (!this.shouldTriggerEdge(edgeIndex)) {
+                continue;
+            }
+
+            this.updateEdgeWatermark(edgeIndex);
+            this.enqueueEdgeTargets(queue, edge.to);
+        }
+    }
+
+    private validateAssembly(): void {
+        const firstEdge = this.NodesEdgeConnections.at(0);
+        const lastEdge = this.NodesEdgeConnections.at(-1);
+
+        if (!firstEdge || !lastEdge) {
+            throw("Graph has to include at least one edge");
+        }
+
+        if (firstEdge.from.length !== 1 || firstEdge.from[0] !== GraphMarkers.START) {
+            throw(`First edge has to start with "${GraphMarkers.START}" only`);
+        }
+
+        if (lastEdge.to.length !== 1 || lastEdge.to[0] !== GraphMarkers.END) {
+            throw(`Last edge has to end with "${GraphMarkers.END}" only`);
+        }
+
+        const lastEdgeIndex = this.NodesEdgeConnections.length - 1;
+
+        for (let edgeIndex = 0; edgeIndex < this.NodesEdgeConnections.length; edgeIndex += 1) {
+            const edge = this.NodesEdgeConnections[edgeIndex];
+
+            if (edge.from.includes(GraphMarkers.END) || edge.to.includes(GraphMarkers.START)) {
+                throw(`"${GraphMarkers.START}" and "${GraphMarkers.END}" cannot be used as regular execution nodes`);
+            }
+
+            if (edgeIndex !== 0 && edge.from.includes(GraphMarkers.START)) {
+                throw(`"${GraphMarkers.START}" can be used only in the first edge source`);
+            }
+
+            if (edgeIndex !== lastEdgeIndex && edge.to.includes(GraphMarkers.END)) {
+                throw(`"${GraphMarkers.END}" can be used only in the last edge target`);
+            }
+
+            for (const fromNodeId of edge.from) {
+                if (fromNodeId !== GraphMarkers.START && !this.NodesLogic[fromNodeId]) {
+                    throw(`Node logic has to be planned for "${fromNodeId}"`);
+                }
+            }
+
+            for (const toNodeId of edge.to) {
+                if (toNodeId !== GraphMarkers.END && !this.NodesLogic[toNodeId]) {
+                    throw(`Node logic has to be planned for "${toNodeId}"`);
+                }
+            }
+        }
+    }
+
+    private async processNodeResult(nodeId: string, logicExecutionResult: Awaited<ReturnType<NodeLogic<GraphState>>>, queue: string[]): Promise<void> {
+        if (!logicExecutionResult) {
             return;
         }
 
+        if (logicExecutionResult.stateUpdate) {
+            this.emitEvent("state_change", nodeId, this.graphState, logicExecutionResult.stateUpdate);
+            this.graphState = logicExecutionResult.stateUpdate;
+        }
+
+        if (!logicExecutionResult.callNode) {
+            return;
+        }
+
+        const redirectNodes = this.normalizeDistribution(logicExecutionResult.callNode);
+
+        for (const redirectNodeId of redirectNodes) {
+            await this.executeNode(redirectNodeId, queue, false);
+        }
+    }
+
+    private async executeNode(nodeId: string, queue: string[], shouldDistributeByEdges: boolean): Promise<void> {
+        const nodeLogic = this.NodesLogic[nodeId];
+
+        if (!nodeLogic) {
+            throw(`Node logic has to be planned for "${nodeId}"`);
+        }
+
+        this.emitEvent("node_start", nodeId, this.graphState);
+
+        const logicExecutionResult = await nodeLogic(this.graphState, nodeId);
+        await this.processNodeResult(nodeId, logicExecutionResult, queue);
+
+        this.emitEvent("node_end", nodeId, this.graphState);
+
+        if (!shouldDistributeByEdges || this.HasReachedEnd) {
+            return;
+        }
+
+        this.incrementNodeCompletion(nodeId);
+        this.processOutgoingEdges(nodeId, queue);
+    }
+    
+    addNode(nodeId: string, logic: NodeLogic<GraphState>): this {
+        this.NodesLogic[nodeId] = logic;
+        return this;
+    }
+
+    addEdge(fromNodeId: NodeEdgeIdDistribution, toNodeId: NodeEdgeIdDistribution, edgeOptions?: EdgeOptions): this {
+        const normalizedFromNodeId = this.normalizeDistribution(fromNodeId);
+        const normalizedToNodeId = this.normalizeDistribution(toNodeId);
+
+        this.NodesEdgeConnections = [
+            ...this.NodesEdgeConnections,
+            {
+                from: normalizedFromNodeId,
+                to: normalizedToNodeId,
+                options: {
+                    asynchronous: edgeOptions?.asynchronous ?? false
+                }
+            }
+        ];
+
+        this.EdgeSyncWatermarks.push({});
+        return this;
+    }
+
+    onEvent<EventName extends keyof GraphEvents<GraphState>>(eventName: EventName, eventListener: GraphEvents<GraphState>[EventName]): this {
+        if (this.EventsListeners[eventName]) {
+            console.warn(`Event listener for "${eventName}" is already registered. Only one listener per event name is allowed.`);
+            return this;
+        }
+
         this.EventsListeners[eventName] = eventListener;
+        return this;
     }
 
     protected emitEvent<EventName extends keyof GraphEvents<GraphState>>(eventName: EventName, ...eventArgs: Parameters<GraphEvents<GraphState>[EventName]>) {
@@ -61,85 +255,32 @@ export class Graph<GraphState extends Record<string, any>> {
     }
 
     async start(): Promise<void> {
-        const firstNode = this.NodesEdgeConnections.at(0)?.[0];
-        const lastNode = this.NodesEdgeConnections.at(-1)?.[1];
+        this.validateAssembly();
+        this.HasReachedEnd = false;
+        this.NodeCompletionCounts = {
+            [GraphMarkers.START]: 1
+        };
+        this.EdgeSyncWatermarks = this.NodesEdgeConnections.map((edge) => {
+            const watermark: Record<string, number> = {};
 
-        // Check of graph assembly correcteness
-        if (firstNode !== GraphMarkers.START) {
-            throw(`First Node has to be equal to "${GraphMarkers.START}" to invoke graph execution`);
-        }
-
-        if (lastNode !== GraphMarkers.END) {
-            throw(`Last Node has to be equal to "${GraphMarkers.END}" to finish graph execution`);
-        }
-
-        // Execute Graph
-        let executionIndexPosition = 0;
-        for (const [fromNodeScheduledId, toNodeScheduledId] of this.NodesEdgeConnections) {
-            const fromNodeScheduledLogic = this.NodesLogic[fromNodeScheduledId];
-            const toNodeScheduledLogic = this.NodesLogic[toNodeScheduledId];
-
-            // Check correcteness of the execution
-            /// Verify is the start and end nodes used properly
-            const forbiddenPositionMarkersMeanwhileExecution = [GraphMarkers.START, GraphMarkers.END];
-            const lastExecutionPositonIndex = this.NodesEdgeConnections.length - 1;
-            
-            const forbiddenNodeInBetweenExecutionLogic = (executionIndexPosition !== 0 && lastExecutionPositonIndex) && (forbiddenPositionMarkersMeanwhileExecution.includes(fromNodeScheduledId as any) || forbiddenPositionMarkersMeanwhileExecution.includes(toNodeScheduledId as any));
-            const forbiddenNodeKeyPositions = (executionIndexPosition === 0 && forbiddenPositionMarkersMeanwhileExecution.includes(toNodeScheduledId as any)) || (executionIndexPosition === lastExecutionPositonIndex && forbiddenPositionMarkersMeanwhileExecution.includes(fromNodeScheduledId as any))
-
-            if (forbiddenNodeInBetweenExecutionLogic || forbiddenNodeKeyPositions) {
-                throw(`"${GraphMarkers.START}" and "${GraphMarkers.END}" cannot be position as between execution nodes. These nodes can be respectivelly put as start or end nodes only`)
-            }
-            
-            /// Verify is the start and end node the one suppose to be
-            if ((!fromNodeScheduledLogic && fromNodeScheduledId !== GraphMarkers.START) || (!toNodeScheduledLogic && toNodeScheduledId !== GraphMarkers.END)) {
-                throw("Node logic has to be planned");
+            for (const fromNodeId of edge.from) {
+                watermark[fromNodeId] = 0;
             }
 
-            // Execute Nodes
-            const processNodesExecutionResult = async (logicExecutionResult: Awaited<ReturnType<NodeLogic<GraphState>>>, registerForNodeType: "from" | "to", registerForNodeId: string) => {
-                // Update node state
-                if (logicExecutionResult?.stateUpdate) {
-                        // Emit state change
-                        this.emitEvent("state_change", registerForNodeId, this.graphState, logicExecutionResult.stateUpdate);
+            return watermark;
+        });
 
-                    // Change state
-                    this.graphState = logicExecutionResult.stateUpdate;
-                }
+        const executionQueue: string[] = [];
+        this.processOutgoingEdges(GraphMarkers.START, executionQueue);
 
-                // Execute other node when was planned to be executable
-                if (logicExecutionResult?.callNode) {
-                    let executeWrapped = true;
-                    
-                    while(executeWrapped) {
-                        // TODO:
-                        break;
-                    }
-                }
-            }
-            
-            /// From Execution
-            if (fromNodeScheduledId !== GraphMarkers.START) { // Start node hasn't logic so it's ignored
-                this.emitEvent("node_start", fromNodeScheduledId, this.graphState);
-                
-                const resultFrom = await fromNodeScheduledLogic(fromNodeScheduledId, this.graphState);
-                await processNodesExecutionResult(resultFrom, "from", fromNodeScheduledId);
+        while (executionQueue.length > 0 && !this.HasReachedEnd) {
+            const nextNodeId = executionQueue.shift();
 
-                this.emitEvent("node_end", fromNodeScheduledId, this.graphState)
+            if (!nextNodeId) {
+                continue;
             }
 
-            /// To Execution
-            if (toNodeScheduledId !== GraphMarkers.END) { // End node hasn't logic so it's ignored
-                this.emitEvent("node_start", toNodeScheduledId, this.graphState);
-                
-                const resultTo = await toNodeScheduledLogic(toNodeScheduledId, this.graphState);
-                await processNodesExecutionResult(resultTo, "to", toNodeScheduledId);
-
-                this.emitEvent("node_end", toNodeScheduledId, this.graphState);
-            }
-
-            //  Increment exctuon index executionIndexPosition
-            executionIndexPosition += 1;
+            await this.executeNode(nextNodeId, executionQueue, true);
         }
     }
     
