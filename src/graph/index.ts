@@ -3,7 +3,7 @@ export enum GraphMarkers {
     END = "__END__"
 }
 
-interface GraphNodeExecutionResult<GraphState extends Record<string, any>> {
+export interface GraphNodeExecutionResult<GraphState extends Record<string, any>> {
     stateUpdate?: GraphState;
     callNode?: NodeEdgeIdDistribution;
 }

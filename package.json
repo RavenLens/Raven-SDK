@@ -25,6 +25,7 @@
   },
   "homepage": "https://github.com/RavenLens/Raven-SDK#readme",
   "dependencies": {
-    "vitest": "^4.1.5"
+    "vitest": "^4.1.5",
+    "zod": "^4.4.3"
   }
 }
