@@ -59,6 +59,7 @@ await graph.start();
 // Returns your updated state via all nodes execution
 const updatedState = graph.getState(); // OR: graph.graphState;
 ```
+<<<<<<< HEAD
 
 > [Check more about graph](./Graph.md)
 
@@ -123,6 +124,8 @@ This is how to create ReAct agent
     // Get agent output
     const agentResponse = agentSync.messages.at(-1).content;
 ```
+=======
+>>>>>>> a731034a209eff7001daa5e7878e51e58b61a60b
 
 ## Contribution
 If you would like to become official contributor contact with one of bellow channels
