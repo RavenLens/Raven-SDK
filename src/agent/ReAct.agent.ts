@@ -43,7 +43,7 @@ export class ReActAgent<Skills extends SkillsFoundation, Knowledge extends Knowl
             messages: config.messages
         })
         reactAgentGraph
-            .addNode("main_node", () => {
+            .addNode("main_node", async () => {
                 /** 
                  * TODO: 
                  * This node is suppose to: 
@@ -54,6 +54,7 @@ export class ReActAgent<Skills extends SkillsFoundation, Knowledge extends Knowl
                  * 5. Produce output by calling the GraphMarkers.END -> TODO: graph node can call END to finish execution
                  * 6. Register events to be called
                 */
+                const modelInvoke = await this.agentConfig.model.invoke();
             })
             .addNode("tools_node", () => {
                 /**

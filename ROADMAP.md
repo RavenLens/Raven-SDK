@@ -14,6 +14,8 @@
         - User prompt - the task given to agent todo
         - Multi-agents execution
         - Events Producing
+        - GACP - Graph Agent communication protocol - communicate bevies of agents on graph
+            - Build RavenLens platform atop of that
         - MCP (Model Context Protocol) - support from the fround point
         - A2A - agent communication protocol support for bevies of agents
         - ACP - agent communication protocol support for bevies of agents
