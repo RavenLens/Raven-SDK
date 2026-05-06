@@ -14,7 +14,7 @@ export interface LLMConfig {
 }
 
 export interface LLMAnswer {
-    /** Set with all messages llm got and the answer as the last message */
+    /** Set with all messages llm got and the answers as the last message/s */
     messages: MessagesVariations[];
     /** Are only the answer messages for this model call */
     answer: (ReasoningMessage | AIMessage | ToolMessage)[];
@@ -28,6 +28,8 @@ export interface LLMAnswer {
 
 export interface InvokeOptions {
     stream?: boolean;
+    /** Model will override his messages called in initialization with the specified here messages */
+    messages?: MessagesVariations[];
 }
 
 export interface StandardLLMShema {

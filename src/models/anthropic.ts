@@ -144,7 +144,7 @@ export class Anthropic implements StandardLLMShema {
                 type: "tool",
                 tool_id: toolUse.id,
                 content,
-                parameters: parseToolCallContentToParams(content)
+                arguments: parseToolCallContentToParams(content)
             } satisfies ToolMessage;
         });
         const thinkingReasonMessage: ReasoningMessage[] | null = completion.content.some(content => content.type === "thinking") ? completion.content
@@ -183,9 +183,13 @@ export class Anthropic implements StandardLLMShema {
     }
 
     async invoke(): Promise<LLMAnswer>;
-    async invoke(options?: { stream: false } | undefined): Promise<LLMAnswer>;
-    async invoke(options: { stream: true }): Promise<AsyncIterable<AnthropicStandalone.Messages.RawMessageStreamEvent>>;
+    async invoke(options?: { stream?: false | undefined, messages: InvokeOptions["messages"] } | undefined): Promise<LLMAnswer>;
+    async invoke(options: { stream: true, messages: InvokeOptions["messages"] }): Promise<AsyncIterable<AnthropicStandalone.Messages.RawMessageStreamEvent>>;
     async invoke(options?: InvokeOptions): Promise<LLMAnswer | AsyncIterable<AnthropicStandalone.Messages.RawMessageStreamEvent>> {
+        if (options?.messages) {
+            this.config.messages = options.messages;
+        }
+        
         const config: AnthropicStandalone.Messages.MessageCreateParamsNonStreaming = {
             model: this.config.model,
             max_tokens: this.config.max_tokens ?? 1024,

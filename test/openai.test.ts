@@ -91,7 +91,7 @@ describe("OpenAI model wrapper", () => {
             messages: [
                 { type: "user", content: "What is weather in Paris?" },
                 { type: "ai", content: "Let me check that for you." },
-                { type: "tool", tool_id: "call_0", content: "{}", parameters: {} }
+                { type: "tool", tool_id: "call_0", content: "{}", arguments: {} }
             ]
         });
 
@@ -135,7 +135,7 @@ describe("OpenAI model wrapper", () => {
                         type: "tool",
                         tool_id: "call_1",
                         content: '{"location":"Paris"}',
-                        parameters: { location: "Paris" }
+                        arguments: { location: "Paris" }
                     }
                 ]
             },
@@ -143,7 +143,7 @@ describe("OpenAI model wrapper", () => {
                 type: "tool",
                 tool_id: "call_1",
                 content: '{"location":"Paris"}',
-                parameters: { location: "Paris" }
+                arguments: { location: "Paris" }
             }
         ]);
         expect(result.messages).toHaveLength(5);

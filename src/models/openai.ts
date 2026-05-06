@@ -117,7 +117,7 @@ export class OpenAI implements StandardLLMShema {
                 type: "tool",
                 tool_id: toolCall.call_id,
                 content: toolCall.input,
-                parameters: parseToolCallContentToParams(toolCall.input)
+                arguments: parseToolCallContentToParams(toolCall.input)
             } satisfies ToolMessage;
         });
 
@@ -156,9 +156,13 @@ export class OpenAI implements StandardLLMShema {
     }
 
     async invoke(): Promise<LLMAnswer>;
-    async invoke(options: { stream: false }): Promise<LLMAnswer>;
-    async invoke(options: { stream: true }): Promise<AsyncIterable<ResponsesAPI.ResponseStreamEvent>>;
+    async invoke(options: { stream?: false | undefined, messages: InvokeOptions["messages"] }): Promise<LLMAnswer>;
+    async invoke(options: { stream: true, messages: InvokeOptions["messages"] }): Promise<AsyncIterable<ResponsesAPI.ResponseStreamEvent>>;
     async invoke(options?: InvokeOptions): Promise<LLMAnswer | AsyncIterable<ResponsesAPI.ResponseStreamEvent>> {
+        if (options?.messages) {
+            this.config.messages = options.messages;
+        }
+        
         const basePayload = this.prepareCreatePayload();
 
         if (options?.stream) {

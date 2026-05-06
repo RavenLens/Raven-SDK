@@ -84,7 +84,7 @@ describe("Anthropic model wrapper", () => {
                 { type: "user", content: "What is weather in Paris?" },
                 { type: "ai", content: "Let me check that for you." },
                 { type: "thinking", content: "I should verify tool output shape.", signature: "sig_prev" },
-                { type: "tool", tool_id: "toolu_prev", content: "{}", parameters: {} }
+                { type: "tool", tool_id: "toolu_prev", content: "{}", arguments: {} }
             ]
         });
 
@@ -158,7 +158,7 @@ describe("Anthropic model wrapper", () => {
                         type: "tool",
                         tool_id: "toolu_1",
                         content: '{"location":"Paris"}',
-                        parameters: { location: "Paris" }
+                        arguments: { location: "Paris" }
                     }
                 ]
             },
@@ -166,7 +166,7 @@ describe("Anthropic model wrapper", () => {
                 type: "tool",
                 tool_id: "toolu_1",
                 content: '{"location":"Paris"}',
-                parameters: { location: "Paris" }
+                arguments: { location: "Paris" }
             }
         ]);
         expect(result.messages).toHaveLength(7);

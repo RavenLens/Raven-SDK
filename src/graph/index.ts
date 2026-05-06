@@ -240,7 +240,7 @@ export class Graph<GraphState extends Record<string, any>> {
         return this;
     }
 
-    protected emitEvent<EventName extends keyof GraphEvents<GraphState>>(eventName: EventName, ...eventArgs: Parameters<GraphEvents<GraphState>[EventName]>) {
+    protected emitEvent<EventName extends keyof GraphEvents<GraphState>>(eventName: EventName, ...eventArgs: arguments<GraphEvents<GraphState>[EventName]>) {
         const eventListener = this.EventsListeners[eventName];
 
         if (!eventListener) {
