@@ -4,17 +4,15 @@ import { z } from "zod";
 import { tool } from "../src/agent/tools";
 import { OpenAI } from "../src/models/openai";
 
-const { openaiCreateMock, openaiCtorMock } = vi.hoisted(() => ({
-    openaiCreateMock: vi.fn(),
+const { openaiResponsesCreateMock, openaiCtorMock } = vi.hoisted(() => ({
+    openaiResponsesCreateMock: vi.fn(),
     openaiCtorMock: vi.fn()
 }));
 
 vi.mock("openai", () => ({
     OpenAI: class {
-        chat = {
-            completions: {
-                create: openaiCreateMock
-            }
+        responses = {
+            create: openaiResponsesCreateMock
         };
 
         constructor(config: unknown) {
@@ -25,34 +23,51 @@ vi.mock("openai", () => ({
 
 describe("OpenAI model wrapper", () => {
     beforeEach(() => {
-        openaiCreateMock.mockReset();
+        openaiResponsesCreateMock.mockReset();
         openaiCtorMock.mockReset();
     });
 
-    it("maps Raven messages/tools into OpenAI payload and output", async () => {
-        openaiCreateMock.mockResolvedValueOnce({
-            choices: [
+    it("maps Raven messages/tools into Responses API payload and output", async () => {
+        openaiResponsesCreateMock.mockResolvedValueOnce({
+            id: "resp_1",
+            created_at: 1,
+            output_text: "It is 20C in Paris.",
+            error: null,
+            incomplete_details: null,
+            instructions: null,
+            metadata: null,
+            model: "gpt-4.1-mini",
+            object: "response",
+            output: [
                 {
-                    message: {
-                        content: "It is 20C in Paris.",
-                        audio: null,
-                        tool_calls: [
-                            {
-                                id: "call_1",
-                                type: "custom",
-                                custom: {
-                                    name: "get_weather",
-                                    input: '{"location":"Paris"}'
-                                }
-                            }
-                        ]
-                    }
+                    type: "custom_tool_call",
+                    call_id: "call_1",
+                    name: "get_weather",
+                    input: '{"location":"Paris"}'
                 }
             ],
+            parallel_tool_calls: false,
+            temperature: null,
+            tool_choice: "auto",
+            tools: [],
             usage: {
-                prompt_tokens: 11,
-                completion_tokens: 7
-            }
+                input_tokens: 11,
+                output_tokens: 7,
+                total_tokens: 18,
+                input_tokens_details: {
+                    cached_tokens: 0
+                },
+                output_tokens_details: {
+                    reasoning_tokens: 2
+                }
+            },
+            top_p: 1,
+            text: {
+                format: {
+                    type: "text"
+                }
+            },
+            status: "completed"
         });
 
         const weatherTool = tool(
@@ -86,41 +101,39 @@ describe("OpenAI model wrapper", () => {
             apiKey: "test-key",
             baseURL: undefined
         });
-        expect(openaiCreateMock).toHaveBeenCalledTimes(1);
-        expect(openaiCreateMock).toHaveBeenCalledWith(
+        expect(openaiResponsesCreateMock).toHaveBeenCalledTimes(1);
+        expect(openaiResponsesCreateMock).toHaveBeenCalledWith(
             expect.objectContaining({
                 model: "gpt-4.1-mini",
-                messages: [
+                input: [
                     { role: "user", content: "What is weather in Paris?" },
-                    { role: "assistant", content: "Let me check that for you.", audio: undefined },
-                    { role: "tool", tool_call_id: "call_0", content: "{}" }
+                    { role: "assistant", content: "Let me check that for you." },
+                    { type: "custom_tool_call_output", call_id: "call_0", output: "{}" }
                 ],
                 tools: [
                     {
                         type: "custom",
-                        custom: {
-                            name: "get_weather",
-                            description: expect.stringContaining("Get weather data for a city")
-                        }
+                        name: "get_weather",
+                        description: expect.stringContaining("Get weather data for a city")
                     }
-                ]
+                ],
+                stream: false
             })
         );
 
         expect(result.tokens).toStrictEqual({
             input: 11,
             output: 7,
-            reasoning: 0
+            reasoning: 2
         });
         expect(result.answer).toStrictEqual([
             {
                 type: "ai",
                 content: "It is 20C in Paris.",
-                audioOutput: null,
                 calledTools: [
                     {
                         type: "tool",
-                        tool_id: "get_weather",
+                        tool_id: "call_1",
                         content: '{"location":"Paris"}',
                         parameters: { location: "Paris" }
                     }
@@ -128,11 +141,74 @@ describe("OpenAI model wrapper", () => {
             },
             {
                 type: "tool",
-                tool_id: "get_weather",
+                tool_id: "call_1",
                 content: '{"location":"Paris"}',
                 parameters: { location: "Paris" }
             }
         ]);
         expect(result.messages).toHaveLength(5);
+    });
+
+    it("returns a stream when invoke is called with stream: true and emits stream events", async () => {
+        const streamEvents = [
+            {
+                type: "response.created",
+                sequence_number: 1,
+                response: {
+                    id: "resp_stream_1"
+                }
+            },
+            {
+                type: "response.completed",
+                sequence_number: 2,
+                response: {
+                    id: "resp_stream_1"
+                }
+            }
+        ];
+
+        openaiResponsesCreateMock.mockResolvedValueOnce({
+            async *[Symbol.asyncIterator]() {
+                for (const event of streamEvents) {
+                    yield event;
+                }
+            }
+        });
+
+        const model = new OpenAI({
+            model: "gpt-5.5",
+            apiKey: "test-key",
+            tools: [],
+            messages: [
+                { type: "user", content: "Say 'double bubble bath' ten times fast." }
+            ]
+        });
+
+        const emittedEvents: unknown[] = [];
+        model.onEvent("stream", (event) => {
+            emittedEvents.push(event);
+        });
+
+        const stream = await model.invoke({ stream: true });
+        const iteratedEvents: unknown[] = [];
+
+        for await (const event of stream) {
+            iteratedEvents.push(event);
+        }
+
+        expect(openaiResponsesCreateMock).toHaveBeenCalledWith(
+            expect.objectContaining({
+                model: "gpt-5.5",
+                input: [
+                    {
+                        role: "user",
+                        content: "Say 'double bubble bath' ten times fast."
+                    }
+                ],
+                stream: true
+            })
+        );
+        expect(iteratedEvents).toStrictEqual(streamEvents);
+        expect(emittedEvents).toStrictEqual(streamEvents);
     });
 });

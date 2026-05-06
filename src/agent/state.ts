@@ -16,6 +16,7 @@ export interface UserMessage {
     content: string;
 }
 
+/** Is the ready ai answer */
 export interface AIMessage {
     type: "ai";
     content?: string | null;
@@ -25,6 +26,14 @@ export interface AIMessage {
     calledTools?: ToolMessage[];
 }
 
+/** It's the thinking process showcase -> included only for the thinking models */
+export interface ReasoningMessage {
+    type: "thinking";
+    /** Thoughts content */
+    content: string;
+}
+
+/** Is the tool usage answer */
 export interface ToolMessage {
     type: "tool";
     /** Otherwise the tool name for RavenADK specified tools */
@@ -42,7 +51,7 @@ export interface ToolMessage {
     toolOutput?: string;
 }
 
-export type MessagesVariations = | UserMessage | AIMessage | ToolMessage;
+export type MessagesVariations = ReasoningMessage | UserMessage | AIMessage | ToolMessage;
 
 export interface AgentMessagesGraphState {
     messages: MessagesVariations[];
