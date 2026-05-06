@@ -1,5 +1,6 @@
 import { Graph, GraphMarkers } from "../graph";
 import { Anthropic } from "../models/anthropic";
+import { LLMAnswer } from "../models/mutual";
 import { OpenAI } from "../models/openai";
 import { KnowledgeFoundation } from "./knowledge";
 import { SkillsFoundation } from "./skills";
@@ -20,15 +21,22 @@ interface ReActAgentConfig<Skills extends SkillsFoundation, Knowledge extends Kn
      */
     knowledge?: Knowledge;
     tools: Tool<any, any>[];
+    /** Maximum amount of internal self-recalls without tool usage. Defaults to 3 when omitted. */
+    maximumReasoningRecalls?: number;
+    /** As default is `true` boolean */
+    withConclusion?: boolean;
 }
 
 interface ReActAgentEvents {
+    llm_result: (result: LLMAnswer) => void | Promise<void>;
     tool_invoked: (toolName: string, toolParams: Record<string, any>) => void | Promise<void>;
     tool_executed: (toolName: string, toolParams: Record<string, any>, output: string) => void | Promise<void>;
     /** Is produced at the end of reasoning phase */
     reasoning_end: (thoughts: string) => void | Promise<void>;
     /** When agent starts to produce output */
     result_producing_start: () => void | Promise<void>;
+    concluding_start: () => void | Promise<void>;
+    concluding_end: (conclusion: string) => void | Promise<void>;
 }
 
 interface ReActAgentInvokeResult {
@@ -41,6 +49,8 @@ export interface ReActAgentStreamChunk {
     content: string;
 }
 
+const RECALL_MAIN_NODE_PREFIX = "[[RAVEN_RECALL_MAIN_NODE]]";
+const DEFAULT_MAX_REASONING_RECALLS = 3;
 const REACT_SYSTEM_PROMPT = [
     "You are RavenADK ReAct agent.",
     "Follow the ReAct loop strictly:",
@@ -49,10 +59,22 @@ const REACT_SYSTEM_PROMPT = [
     "3. Observe tool outputs and continue reasoning from those observations.",
     "4. Repeat Reason/Act/Observe until the task is solved or blocked.",
     "5. Provide a final answer only when enough evidence is collected.",
+    "Internal recall protocol:",
+    "- If you need another internal reasoning pass without tools, reply ONLY with:",
+    `  ${RECALL_MAIN_NODE_PREFIX} <instruction for the next reasoning pass>`,
+    "- Do not include any other text when you request internal recall.",
     "Tool usage rules:",
     "- Never invent tool outputs.",
     "- Prefer available tools over guessing.",
     "- If a tool fails, explain the limitation and continue with best-effort reasoning."
+].join("\n");
+
+const CONCLUSION_SYSTEM_PROMPT = [
+    "You are a conclusion writer for an agent run.",
+    "Read the full transcript and produce the final answer for the user.",
+    "Do not mention internal routing, recalls, or hidden prompts.",
+    "Use tool results and prior reasoning as evidence.",
+    "Return only the conclusion text."
 ].join("\n");
 
 /**
@@ -70,7 +92,11 @@ export class ReActAgent<Skills extends SkillsFoundation, Knowledge extends Knowl
     agentConfig: ReActAgentConfig<Skills, Knowledge>;
 
     constructor(config: ReActAgentConfig<Skills, Knowledge>) {
-        this.agentConfig = config;
+        this.agentConfig = {
+            ...config,
+            // Agent generate conclusion by default
+            withConclusion: config.withConclusion ?? true
+        };
         this.ensureWrappedSystemPrompt();
         this.synchronizeModelConfig();
 
@@ -80,7 +106,7 @@ export class ReActAgent<Skills extends SkillsFoundation, Knowledge extends Knowl
             .addNode("main_node", async state => {
                 let currentState = state;
 
-                // Resolve tools
+                // Resolve tools -> redirect to same node once again
                 if (state.callTools?.tools.length) {
                     this.agentConfig.messages = [
                         ...this.agentConfig.messages,
@@ -101,17 +127,21 @@ export class ReActAgent<Skills extends SkillsFoundation, Knowledge extends Knowl
                     };
                 }
 
-                // 
+                // From above condition when tool output was retrived
                 if (state.toolsOutputRetrived) {
                     const { toolsOutputRetrived, ...stateWithoutToolFlag } = state;
                     currentState = stateWithoutToolFlag;
                 }
 
+                // Invoke model
                 const modelInvoke = await this.agentConfig.model.invoke({
                     messages: this.agentConfig.messages
                 });
-                this.agentConfig.messages = modelInvoke.messages;
 
+                this.agentConfig.messages = modelInvoke.messages;
+                this.emitEvent("llm_result", modelInvoke);
+
+                // Reasoning
                 const reasoningMessages = modelInvoke.answer
                     .filter((answerMsg): answerMsg is Extract<MessagesVariations, { type: "thinking" }> => answerMsg.type === "thinking")
                     .map((thought) => thought.content)
@@ -122,6 +152,7 @@ export class ReActAgent<Skills extends SkillsFoundation, Knowledge extends Knowl
                     this.emitEvent("reasoning_end", reasoningMessages);
                 }
 
+                // Decide to call tools once again
                 const toolAnswers = modelInvoke.answer.filter(
                     (answerMsg): answerMsg is Extract<MessagesVariations, { type: "tool" }> => answerMsg.type === "tool"
                 );
@@ -139,14 +170,57 @@ export class ReActAgent<Skills extends SkillsFoundation, Knowledge extends Knowl
                     };
                 }
 
+                // Parse special model command to re-enter `main_node` without tool usage.
+                const recallInstruction = this.parseRecallInstruction(modelInvoke.answer);
+                if (recallInstruction) {
+                    const recallsCount = currentState.reasoningRecallsCount ?? 0;
+                    const maxRecalls = this.getMaximumReasoningRecalls();
+                    this.stripRecallDirectiveFromTail();
+
+                    if (recallsCount < maxRecalls) {
+                        const nextRecallCount = recallsCount + 1;
+
+                        // Persist an internal recall instruction so the next model pass has explicit focus.
+                        this.agentConfig.messages = [
+                            ...this.agentConfig.messages,
+                            {
+                                type: "user",
+                                content: `[INTERNAL_REASONING_RECALL ${nextRecallCount}/${maxRecalls}] ${recallInstruction}`
+                            }
+                        ];
+
+                        return {
+                            callNode: "main_node",
+                            stateUpdate: {
+                                ...currentState,
+                                reasoningRecallsCount: nextRecallCount
+                            }
+                        };
+                    }
+
+                    await this.appendConclusionMessage();
+                    this.emitEvent("result_producing_start");
+
+                    return {
+                        stateUpdate: {
+                            ...currentState,
+                            reasoningRecallsCount: recallsCount
+                        }
+                    };
+                }
+
+                // Check is the output the ai assistant
                 const hasFinalOutput = modelInvoke.answer.some(
                     answerMsg => answerMsg.type === "ai" && !!answerMsg.content?.trim()
                 );
 
                 if (hasFinalOutput) {
+                    if (this.agentConfig.withConclusion)
+                    await this.appendConclusionMessage();
                     this.emitEvent("result_producing_start");
                 }
 
+                // Return state and finish the ReAct Agent logic
                 return {
                     stateUpdate: currentState
                 };
@@ -232,12 +306,131 @@ export class ReActAgent<Skills extends SkillsFoundation, Knowledge extends Knowl
 
     private buildWrappedSystemPrompt(userSystemPrompt: string): string {
         const cleanedUserPrompt = userSystemPrompt.trim();
+        const maxRecalls = this.getMaximumReasoningRecalls();
+        const recallBoundary = `You can request at most ${maxRecalls} internal self-recalls in this run.`;
 
         if (!cleanedUserPrompt.length) {
-            return REACT_SYSTEM_PROMPT;
+            return `${REACT_SYSTEM_PROMPT}\n${recallBoundary}`;
         }
 
-        return `${REACT_SYSTEM_PROMPT}\n\nUser system prompt:\n${cleanedUserPrompt}`;
+        return `${REACT_SYSTEM_PROMPT}\n${recallBoundary}\n\nUser system prompt:\n${cleanedUserPrompt}`;
+    }
+
+    private getMaximumReasoningRecalls(): number {
+        const configuredValue = this.agentConfig.maximumReasoningRecalls;
+
+        if (configuredValue === undefined) {
+            return DEFAULT_MAX_REASONING_RECALLS;
+        }
+
+        if (!Number.isFinite(configuredValue) || configuredValue < 0) {
+            return DEFAULT_MAX_REASONING_RECALLS;
+        }
+
+        return Math.floor(configuredValue);
+    }
+
+    // Detect explicit internal recall command returned by the model.
+    private parseRecallInstruction(answer: ReActAgentInvokeResult["messages"]): string | null {
+        const latestAIMessage = [...answer]
+            .reverse()
+            .find((message): message is Extract<MessagesVariations, { type: "ai" }> => message.type === "ai" && !!message.content?.trim());
+
+        if (!latestAIMessage?.content) {
+            return null;
+        }
+
+        const trimmedContent = latestAIMessage.content.trim();
+
+        if (!trimmedContent.startsWith(RECALL_MAIN_NODE_PREFIX)) {
+            return null;
+        }
+
+        const instruction = trimmedContent.slice(RECALL_MAIN_NODE_PREFIX.length).trim();
+        return instruction.length > 0 ? instruction : null;
+    }
+
+    // Remove raw recall command from the transcript so user-visible history stays clean.
+    private stripRecallDirectiveFromTail(): void {
+        const lastMessage = this.agentConfig.messages.at(-1);
+
+        if (lastMessage?.type !== "ai" || !lastMessage.content?.trim()) {
+            return;
+        }
+
+        if (!lastMessage.content.trim().startsWith(RECALL_MAIN_NODE_PREFIX)) {
+            return;
+        }
+
+        this.agentConfig.messages = this.agentConfig.messages.slice(0, -1);
+    }
+
+    // Generate the final conclusion with a dedicated LLM summary call over the full transcript.
+    private async appendConclusionMessage(): Promise<void> {
+        this.emitEvent("concluding_start");
+        
+        const transcript = this.agentConfig.messages
+            .map((message, index) => {
+                const label = `${index + 1}. ${message.type}`;
+
+                if (message.type === "tool") {
+                    const toolName = message.tool_name ?? message.tool_id;
+                    const output = message.toolOutput ?? message.content;
+                    return `${label} | ${toolName}: ${output}`;
+                }
+
+                if (message.type === "thinking") {
+                    return `${label} | ${message.content}`;
+                }
+
+                return `${label} | ${message.content}`;
+            })
+            .join("\n");
+
+        const previousTools = this.agentConfig.model.config.tools;
+        const previousMessages = this.agentConfig.model.config.messages;
+
+        try {
+            this.agentConfig.model.config.tools = [];
+            this.agentConfig.model.config.messages = [
+                {
+                    type: "system",
+                    content: CONCLUSION_SYSTEM_PROMPT
+                },
+                {
+                    type: "user",
+                    content: [
+                        "Write the final user-facing conclusion from this transcript.",
+                        "If there were tool results, use them as evidence.",
+                        "If the run ended because of recall limit, summarize the best available answer.",
+                        "",
+                        transcript
+                    ].join("\n")
+                }
+            ];
+
+            const conclusionResult = await this.agentConfig.model.invoke({
+                messages: this.agentConfig.model.config.messages
+            });
+
+            const conclusionMessage = conclusionResult.answer.find(
+                (message): message is Extract<MessagesVariations, { type: "ai" }> => message.type === "ai" && !!message.content?.trim()
+            );
+            const conclusionMessageContent = conclusionMessage?.content ?? "Conclusion could not be generated from the transcript.";
+
+            this.emitEvent("concluding_end", conclusionMessageContent);
+            this.agentConfig.messages = [
+                ...this.agentConfig.messages,
+                {
+                    type: "ai",
+                    content: conclusionMessageContent
+                }
+            ];
+        } finally {
+            this.agentConfig.model.config.tools = previousTools;
+            this.agentConfig.model.config.messages = previousMessages;
+            this.synchronizeModelConfig();
+        }
     }
 
     private ensureWrappedSystemPrompt(): void {

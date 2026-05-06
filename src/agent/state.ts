@@ -71,6 +71,8 @@ export interface AgentMessagesGraphState {
         */
         tools: ToolMessage[];
     };
+    /** Number of times the model requested an internal main_node recall without tools. */
+    reasoningRecallsCount?: number;
     toolsOutputRetrived?: boolean;
 }
 
