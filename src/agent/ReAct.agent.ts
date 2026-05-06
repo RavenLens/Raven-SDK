@@ -2,12 +2,12 @@ import { Graph, GraphMarkers } from "../graph";
 import { Anthropic } from "../models/anthropic";
 import { LLMAnswer } from "../models/mutual";
 import { OpenAI } from "../models/openai";
-import { KnowledgeFoundation } from "./knowledge";
-import { SkillsFoundation } from "./skills";
+import { SchemaMemoryStore } from "./memory/schema";
+import { SchemaSkillStore } from "./skills/stores/schema";
 import { AgentMessagesGraphState, MessagesVariations } from "./state";
 import { Tool } from "./tools";
 
-interface ReActAgentConfig<Skills extends SkillsFoundation, Knowledge extends KnowledgeFoundation> {
+interface ReActAgentConfig<Skills extends SchemaSkillStore, Memory extends SchemaMemoryStore> {
     model: OpenAI | Anthropic;
     systemPrompt: string;
     messages: MessagesVariations[];
@@ -19,7 +19,7 @@ interface ReActAgentConfig<Skills extends SkillsFoundation, Knowledge extends Kn
     /**
      * It's the agent knowledge he developed for specific user session or for organization
      */
-    knowledge?: Knowledge;
+    knowledge?: Memory;
     tools: Tool<any, any>[];
     /** Maximum amount of internal self-recalls without tool usage. Defaults to 3 when omitted. */
     maximumReasoningRecalls?: number;
@@ -124,13 +124,13 @@ const CONCLUSION_SYSTEM_PROMPT = [
  * 5. Produce output by completing `main_node`, then graph continues to GraphMarkers.END
  * 6. Emit events for reasoning and tool lifecycle
 */
-export class ReActAgent<Skills extends SkillsFoundation, Knowledge extends KnowledgeFoundation> {
+export class ReActAgent<Skills extends SchemaSkillStore, Memory extends SchemaMemoryStore> {
     private AgentGraph: Graph<AgentMessagesGraphState>;
     private EventsListeners: Record<string, (...args: any[]) => void | Promise<void>> = {};
     private StreamListeners: Set<ReActAgentStreamListener> = new Set();
-    agentConfig: ReActAgentConfig<Skills, Knowledge>;
+    agentConfig: ReActAgentConfig<Skills, Memory>;
 
-    constructor(config: ReActAgentConfig<Skills, Knowledge>) {
+    constructor(config: ReActAgentConfig<Skills, Memory>) {
         this.agentConfig = {
             ...config,
             // Agent generate conclusion by default

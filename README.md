@@ -126,6 +126,7 @@ This is how to create ReAct agent
 
 #### Skills
 Skills of RavenADK are compliant with open [skills standard](https://agentskills.io/home) what is use by e.g: Claude Code, MS Copilot and likelly more
+[Read more about RavenADK skills](./Skills.md)
 
 ## Contribution
 If you would like to become official contributor contact with one of bellow channels
