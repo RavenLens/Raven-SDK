@@ -44,10 +44,48 @@ interface ReActAgentInvokeResult {
     state: AgentMessagesGraphState;
 }
 
-export interface ReActAgentStreamChunk {
-    type: "reasoning" | "output";
-    content: string;
+interface ReActAgentStreamEventMap {
+    llm_result: {
+        content: LLMAnswer;
+    };
+    tool_invoked: {
+        content: {
+            toolName: string;
+            toolParams: Record<string, any>;
+        };
+    };
+    tool_executed: {
+        content: {
+            toolName: string;
+            toolParams: Record<string, any>;
+            output: string;
+        };
+    };
+    reasoning_end: {
+        content: {
+            thoughts: string;
+        };
+    };
+    result_producing_start: {
+        content: null;
+    };
+    concluding_start: {
+        content: null;
+    };
+    concluding_end: {
+        content: {
+            conclusion: string;
+        };
+    };
 }
+
+export type ReActAgentStreamChunk = {
+    [EventName in keyof ReActAgentStreamEventMap]: {
+        event: EventName;
+    } & ReActAgentStreamEventMap[EventName]
+}[keyof ReActAgentStreamEventMap];
+
+type ReActAgentStreamListener = (event: ReActAgentStreamChunk) => void;
 
 const RECALL_MAIN_NODE_PREFIX = "[[RAVEN_RECALL_MAIN_NODE]]";
 const DEFAULT_MAX_REASONING_RECALLS = 3;
@@ -89,6 +127,7 @@ const CONCLUSION_SYSTEM_PROMPT = [
 export class ReActAgent<Skills extends SkillsFoundation, Knowledge extends KnowledgeFoundation> {
     private AgentGraph: Graph<AgentMessagesGraphState>;
     private EventsListeners: Record<string, (...args: any[]) => void | Promise<void>> = {};
+    private StreamListeners: Set<ReActAgentStreamListener> = new Set();
     agentConfig: ReActAgentConfig<Skills, Knowledge>;
 
     constructor(config: ReActAgentConfig<Skills, Knowledge>) {
@@ -215,8 +254,9 @@ export class ReActAgent<Skills extends SkillsFoundation, Knowledge extends Knowl
                 );
 
                 if (hasFinalOutput) {
-                    if (this.agentConfig.withConclusion)
-                    await this.appendConclusionMessage();
+                    if (this.agentConfig.withConclusion) {
+                        await this.appendConclusionMessage();
+                    }
                     this.emitEvent("result_producing_start");
                 }
 
@@ -413,6 +453,8 @@ export class ReActAgent<Skills extends SkillsFoundation, Knowledge extends Knowl
                 messages: this.agentConfig.model.config.messages
             });
 
+            this.emitEvent("llm_result", conclusionResult);
+
             const conclusionMessage = conclusionResult.answer.find(
                 (message): message is Extract<MessagesVariations, { type: "ai" }> => message.type === "ai" && !!message.content?.trim()
             );
@@ -451,6 +493,69 @@ export class ReActAgent<Skills extends SkillsFoundation, Knowledge extends Knowl
         this.agentConfig.model.config.messages = this.agentConfig.messages;
     }
 
+    private emitStreamEvent(event: ReActAgentStreamChunk): void {
+        this.StreamListeners.forEach((listener) => {
+            try {
+                listener(event);
+            } catch (error) {
+                console.warn("ReAct stream listener failed during execution.", error);
+            }
+        });
+    }
+
+    private mapEventToStreamChunk<EventName extends keyof ReActAgentEvents>(eventName: EventName, ...eventArgs: Parameters<ReActAgentEvents[EventName]>): ReActAgentStreamChunk | null {
+        switch (eventName) {
+            case "llm_result":
+                return {
+                    event: "llm_result",
+                    content: eventArgs[0] as LLMAnswer
+                };
+            case "tool_invoked":
+                return {
+                    event: "tool_invoked",
+                    content: {
+                        toolName: eventArgs[0] as string,
+                        toolParams: eventArgs[1] as Record<string, any>
+                    }
+                };
+            case "tool_executed":
+                return {
+                    event: "tool_executed",
+                    content: {
+                        toolName: eventArgs[0] as string,
+                        toolParams: eventArgs[1] as Record<string, any>,
+                        output: eventArgs[2] as string
+                    }
+                };
+            case "reasoning_end":
+                return {
+                    event: "reasoning_end",
+                    content: {
+                        thoughts: eventArgs[0] as string
+                    }
+                };
+            case "result_producing_start":
+                return {
+                    event: "result_producing_start",
+                    content: null
+                };
+            case "concluding_start":
+                return {
+                    event: "concluding_start",
+                    content: null
+                };
+            case "concluding_end":
+                return {
+                    event: "concluding_end",
+                    content: {
+                        conclusion: eventArgs[0] as string
+                    }
+                };
+            default:
+                return null;
+        }
+    }
+
     onEvent<EventName extends keyof ReActAgentEvents>(
         eventName: EventName,
         eventListener: ReActAgentEvents[EventName]
@@ -468,6 +573,13 @@ export class ReActAgent<Skills extends SkillsFoundation, Knowledge extends Knowl
         eventName: EventName,
         ...eventArgs: Parameters<ReActAgentEvents[EventName]>
     ) {
+        const streamEvent = this.mapEventToStreamChunk(eventName, ...eventArgs);
+
+        // Emit stream event
+        if (streamEvent) {
+            this.emitStreamEvent(streamEvent);
+        }
+
         const eventListener = this.EventsListeners[eventName];
 
         if (!eventListener) {
@@ -497,33 +609,61 @@ export class ReActAgent<Skills extends SkillsFoundation, Knowledge extends Knowl
     }
 
     async invokeStream(): Promise<AsyncIterable<ReActAgentStreamChunk>> {
-        const previousLength = this.agentConfig.messages.length;
-        const invocationResult = await this.invoke();
+        // Start the agent in the background and stream each emitted ReAct event immediately.
+        const self = this;
 
-        const streamMessages = invocationResult.messages
-            .slice(previousLength)
-            .filter((message) => message.type === "thinking" || (message.type === "ai" && !!message.content?.trim()));
+        return {
+            async *[Symbol.asyncIterator](): AsyncGenerator<ReActAgentStreamChunk> {
+                const eventQueue: ReActAgentStreamChunk[] = [];
+                const waiters: Array<() => void> = [];
+                let finished = false;
+                let failure: unknown = null;
 
-        const streamGenerator = async function* (): AsyncGenerator<ReActAgentStreamChunk> {
-            for (const message of streamMessages) {
-                if (message.type === "thinking") {
-                    yield {
-                        type: "reasoning",
-                        content: message.content
-                    };
-                    continue;
-                }
+                const wakeNext = () => {
+                    const waiter = waiters.shift();
+                    if (waiter) {
+                        waiter();
+                    }
+                };
 
-                if (message.type === "ai" && message.content) {
-                    yield {
-                        type: "output",
-                        content: message.content
-                    };
+                const pushEvent: ReActAgentStreamListener = (event) => {
+                    eventQueue.push(event);
+                    wakeNext();
+                };
+
+                self.StreamListeners.add(pushEvent);
+
+                const execution = self.invoke()
+                    .catch((error) => {
+                        failure = error;
+                    })
+                    .finally(() => {
+                        finished = true;
+                        wakeNext();
+                    });
+
+                try {
+                    while (!finished || eventQueue.length > 0) {
+                        if (!eventQueue.length) {
+                            await new Promise<void>((resolve) => {
+                                waiters.push(resolve);
+                            });
+                            continue;
+                        }
+
+                        yield eventQueue.shift() as ReActAgentStreamChunk;
+                    }
+
+                    await execution;
+
+                    if (failure) {
+                        throw failure;
+                    }
+                } finally {
+                    self.StreamListeners.delete(pushEvent);
                 }
             }
         };
-
-        return streamGenerator();
     }
 
     public get messages() {
