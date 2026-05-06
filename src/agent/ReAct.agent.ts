@@ -1,12 +1,13 @@
 import { Graph, GraphMarkers } from "../graph";
-import { AnthropicAIApiLLM, CustomLLM, OpenAIApiLLM } from "../models";
+import { Anthropic } from "../models/anthropic";
+import { OpenAI } from "../models/openai";
 import { KnowledgeFoundation } from "./knowledge";
 import { SkillsFoundation } from "./skills";
 import { AgentMessagesGraphState, MessagesVariations } from "./state";
 import { Tool } from "./tools";
 
 interface ReActAgentConfig<Skills extends SkillsFoundation, Knowledge extends KnowledgeFoundation> {
-    model: OpenAIApiLLM | AnthropicAIApiLLM | CustomLLM;
+    model: OpenAI | Anthropic;
     systemPrompt: string;
     messages: MessagesVariations[];
     /**

@@ -1,4 +1,4 @@
-import { AIMessage, MessagesVariations, ToolMessage } from "../agent/state";
+import { AIMessage, MessagesVariations, ReasoningMessage, ToolMessage } from "../agent/state";
 import { Tool } from "../agent/tools";
 
 export interface LLMConfig {
@@ -17,7 +17,7 @@ export interface LLMAnswer {
     /** Set with all messages llm got and the answer as the last message */
     messages: MessagesVariations[];
     /** Are only the answer messages for this model call */
-    answer: (AIMessage | ToolMessage)[];
+    answer: (ReasoningMessage | AIMessage | ToolMessage)[];
     tokens: {
         input: number;
         output: number;
@@ -26,7 +26,12 @@ export interface LLMAnswer {
     }
 }
 
+export interface InvokeOptions {
+    stream?: boolean;
+}
+
 export interface StandardLLMShema {
+    apiName: "Anthropic" | "OpenAI" | { custom: string };
     config: LLMConfig;
     invoke(): Promise<LLMAnswer>;
 }

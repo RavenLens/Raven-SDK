@@ -1,16 +1,29 @@
-import { LLMAnswer, LLMConfig, StandardLLMShema } from "./mutual";
+import { InvokeOptions, LLMAnswer, LLMConfig, StandardLLMShema } from "./mutual";
 import { Anthropic as AnthropicStandalone } from '@anthropic-ai/sdk';
 import { MessageParam, Tool, ToolUseBlock } from "@anthropic-ai/sdk/resources/messages";
 import { parseToolCallContentToParams, parseToolDescription } from "../agent/tools";
-import { AIMessage, ToolMessage } from "../agent/state";
+import { AIMessage, ReasoningMessage, ToolMessage } from "../agent/state";
 import * as z from "zod";
+import { ThinkingConfigParam } from "@anthropic-ai/sdk/resources";
 
-export class Anthropic implements StandardLLMShema {    
+export interface AnthropicConfig extends LLMConfig {
+    thinking?: ThinkingConfigParam;
+    /** As default max tokens are 1024 */
+    max_tokens?: number;
+}
+
+interface AnthropicAIEvents {
+    stream: (event: AnthropicStandalone.Messages.RawMessageStreamEvent) => void | Promise<void>;
+}
+
+export class Anthropic implements StandardLLMShema {
+    apiName = "Anthropic" as const;
     private anthropic: AnthropicStandalone;
+    private EventsListeners: Partial<{ [EventName in keyof AnthropicAIEvents]: AnthropicAIEvents[EventName] }> = {};
     baseURL?: string;
-    config: LLMConfig;
+    config: AnthropicConfig;
     
-    constructor(config: LLMConfig, baseURL?: string) {
+    constructor(config: AnthropicConfig, baseURL?: string) {
         this.config = config;
         this.baseURL = config.baseURL ?? baseURL;
 
@@ -33,6 +46,26 @@ export class Anthropic implements StandardLLMShema {
                         role: "assistant",
                         content: message.content ?? ""
                     } satisfies MessageParam;
+                case "thinking":
+                    // Anthropic requires model-issued signatures for thinking blocks.
+                    // If no signature is present, degrade to assistant text instead of sending an invalid block.
+                    if (!message.signature) {
+                        return {
+                            role: "assistant",
+                            content: `Assistant thoughts: ${message.content}`
+                        } satisfies MessageParam;
+                    }
+
+                    return {
+                        role: "assistant",
+                        content: [
+                            {
+                                type: "thinking",
+                                thinking: message.content,
+                                signature: message.signature
+                            }
+                        ]
+                    } satisfies MessageParam
                 case "tool":
                     return {
                         role: "user",
@@ -63,14 +96,39 @@ export class Anthropic implements StandardLLMShema {
         });
     }
 
-    async invoke(): Promise<LLMAnswer> {
-        const completion = await this.anthropic.messages.create({
-            model: this.config.model,
-            max_tokens: 1024,
-            messages: this.prepareMessages(),
-            tools: this.prepareTools()
-        });
+    onEvent<EventName extends keyof AnthropicAIEvents>(eventName: EventName, eventListener: AnthropicAIEvents[EventName]): this {
+        if (this.EventsListeners[eventName]) {
+            console.warn(`Event listener for "${eventName}" is already registered. Only one listener per event name is allowed.`);
+            return this;
+        }
 
+        this.EventsListeners[eventName] = eventListener;
+        return this;
+    }
+
+    protected emitEvent<EventName extends keyof AnthropicAIEvents>(eventName: EventName, ...eventArgs: Parameters<AnthropicAIEvents[EventName]>) {
+        const eventListener = this.EventsListeners[eventName];
+
+        if (!eventListener) {
+            return;
+        }
+
+        const listener = eventListener as unknown as AnthropicAIEvents[EventName];
+
+        void Promise.resolve((listener as any)(...eventArgs)).catch((error) => {
+            console.warn(`Event listener for "${String(eventName)}" failed during execution.`, error);
+        });
+    }
+    
+    private async *streamWithEvents(stream: AsyncIterable<AnthropicStandalone.Messages.RawMessageStreamEvent>) {
+        for await (const event of stream) {
+            this.emitEvent("stream", event);
+            yield event;
+        }
+    }
+
+    private prepareSyncAnswer(completion: AnthropicStandalone.Messages.Message & { _request_id?: string | null; }) {
+        // Obtain answer content
         const answerContentText = completion.content
             .filter((block) => block.type === "text")
             .map((block) => block.text)
@@ -78,6 +136,7 @@ export class Anthropic implements StandardLLMShema {
             .trim();
         const answerTools = completion.content.filter((block): block is ToolUseBlock => block.type === "tool_use");
 
+        // Prepare answer 
         const calledToolsMessage = answerTools.map((toolUse) => {
             const content = typeof toolUse.input === "string" ? toolUse.input : JSON.stringify(toolUse.input);
 
@@ -88,7 +147,13 @@ export class Anthropic implements StandardLLMShema {
                 parameters: parseToolCallContentToParams(content)
             } satisfies ToolMessage;
         });
-
+        const thinkingReasonMessage: ReasoningMessage[] | null = completion.content.some(content => content.type === "thinking") ? completion.content
+            .filter(content => content.type === "thinking")
+            .map(content => ({
+                type: "thinking",
+                content: content.thinking,
+                signature: content.signature
+            })) : null;
         const aiAnswer: AIMessage | null = answerContentText
             ? {
                 type: "ai",
@@ -96,11 +161,13 @@ export class Anthropic implements StandardLLMShema {
                 calledTools: calledToolsMessage
             }
             : null;
-        const answer: (AIMessage | ToolMessage)[] = [
+        const answer: (ReasoningMessage | AIMessage | ToolMessage)[] = [
+            ...(thinkingReasonMessage ?? []),
             ...(aiAnswer ? [aiAnswer] : []),
             ...calledToolsMessage
-        ];
+        ].filter(v => v !== null);
 
+        // Output message
         return {
             messages: [
                 ...this.config.messages,
@@ -112,6 +179,28 @@ export class Anthropic implements StandardLLMShema {
                 output: completion.usage.output_tokens,
                 reasoning: 0
             }
+        }
+    }
+
+    async invoke(): Promise<LLMAnswer>;
+    async invoke(options?: { stream: false } | undefined): Promise<LLMAnswer>;
+    async invoke(options: { stream: true }): Promise<AsyncIterable<AnthropicStandalone.Messages.RawMessageStreamEvent>>;
+    async invoke(options?: InvokeOptions): Promise<LLMAnswer | AsyncIterable<AnthropicStandalone.Messages.RawMessageStreamEvent>> {
+        const config: AnthropicStandalone.Messages.MessageCreateParamsNonStreaming = {
+            model: this.config.model,
+            max_tokens: this.config.max_tokens ?? 1024,
+            messages: this.prepareMessages(),
+            tools: this.prepareTools(),
+            thinking: this.config.thinking
+        }
+        
+        if (options?.stream) {
+            const streamCompletion = this.anthropic.messages.stream(config);
+            return this.streamWithEvents(streamCompletion);
+        } else {
+            // Execute llm
+            const completion = await this.anthropic.messages.create(config);
+            return this.prepareSyncAnswer(completion);
         }
     }
 }

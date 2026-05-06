@@ -31,6 +31,8 @@ export interface ReasoningMessage {
     type: "thinking";
     /** Thoughts content */
     content: string;
+    /** Optional signature */
+    signature?: string;
 }
 
 /** Is the tool usage answer */

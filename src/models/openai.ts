@@ -1,4 +1,4 @@
-import { LLMAnswer, LLMConfig, StandardLLMShema } from "./mutual";
+import { InvokeOptions, LLMAnswer, LLMConfig, StandardLLMShema } from "./mutual";
 import { OpenAI as OpenAIStandalone } from 'openai';
 import type * as ResponsesAPI from "openai/resources/responses/responses";
 import { parseToolCallContentToParams, parseToolDescription } from "../agent/tools";
@@ -9,10 +9,6 @@ export interface OpenAIConfig extends LLMConfig {
     reasoningEffort?: ReasoningEffort | null
 }
 
-export interface OpenAIInvokeOptions {
-    stream?: boolean;
-}
-
 interface OpenAIEvents {
     stream: (event: ResponsesAPI.ResponseStreamEvent) => void | Promise<void>;
 }
@@ -21,6 +17,7 @@ interface OpenAIEvents {
  * Wrapper for OpenAI for RavenADK
 */
 export class OpenAI implements StandardLLMShema {    
+    apiName = "OpenAI" as const;
     private openai: OpenAIStandalone;
     private EventsListeners: Partial<{ [EventName in keyof OpenAIEvents]: OpenAIEvents[EventName] }> = {};
     config: OpenAIConfig;
@@ -161,7 +158,7 @@ export class OpenAI implements StandardLLMShema {
     async invoke(): Promise<LLMAnswer>;
     async invoke(options: { stream: false }): Promise<LLMAnswer>;
     async invoke(options: { stream: true }): Promise<AsyncIterable<ResponsesAPI.ResponseStreamEvent>>;
-    async invoke(options?: OpenAIInvokeOptions): Promise<LLMAnswer | AsyncIterable<ResponsesAPI.ResponseStreamEvent>> {
+    async invoke(options?: InvokeOptions): Promise<LLMAnswer | AsyncIterable<ResponsesAPI.ResponseStreamEvent>> {
         const basePayload = this.prepareCreatePayload();
 
         if (options?.stream) {
