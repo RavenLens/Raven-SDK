@@ -2,7 +2,7 @@ import * as z from "zod";
 
 type ToolLogic<ToolLogicArgs extends z.ZodObject> = (argsObj: z.infer<ToolLogicArgs>) => Promise<string> | string;
 
-interface ToolConfig<
+export interface ToolConfig<
     ToolLogicArgs extends z.ZodObject,
     ToolOutputSchema extends z.ZodObject
 > {
@@ -10,7 +10,10 @@ interface ToolConfig<
     toolDescription: string;
     /** Specify what a argument has to take the tool logic function */
     toolArguments: ToolLogicArgs;
-    /** Describe object will be stringified by the logic */
+    /**
+     * Describe object will be stringified by the logic
+     * If not specified tool will not give llm information about output of the tool
+    */
     toolOutputSchema?: ToolOutputSchema;
 }
 
@@ -34,6 +37,24 @@ export class Tool<ToolArgs extends z.ZodObject, ToolOutputSchema extends z.ZodOb
         
         return result;
     }
+}
+
+export function parseToolCallContentToParams(toolCallInputContent: string): Record<string, any> | null {
+    try {
+        const parsedContent = JSON.parse(toolCallInputContent);
+        return parsedContent;
+    }
+    catch(err) {
+        return null;
+    }
+}
+
+export function parseToolDescription(toolConfig: ToolConfig<any, any>): string {
+        return `
+Description of tool: "${toolConfig.toolDescription}"
+Tool has to take arguments follows this zod schema: "${z.toJSONSchema(toolConfig.toolArguments)}"
+${toolConfig.toolOutputSchema ? `Tool from logic wraps your response is going to return such result: ${z.toJSONSchema(toolConfig.toolOutputSchema)}` : ""}
+        `
 }
 
 /** Use to define agent tool */

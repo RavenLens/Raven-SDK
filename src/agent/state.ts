@@ -1,3 +1,4 @@
+import { ChatCompletionAssistantMessageParam, ChatCompletionAudio } from "openai/resources.js";
 import { GraphNodeExecutionResult } from "../graph";
 
 /**
@@ -17,13 +18,26 @@ export interface UserMessage {
 
 export interface AIMessage {
     type: "ai";
-    content: string;
+    content?: string | null;
+    audioInput?: ChatCompletionAssistantMessageParam.Audio | null;
+    audioOutput?: ChatCompletionAudio | null;
+    /** Attached when ai had in message the tool call */
+    calledTools?: ToolMessage[];
 }
 
 export interface ToolMessage {
     type: "tool";
-    tool_name: string;
-    parameters: Record<string, any>;
+    /** Otherwise the tool name for RavenADK specified tools */
+    tool_id: string;
+    /**
+     * The contents of the tool message from the LLM call
+    */
+    content: string;
+    /**
+     * Tool parameters are retrived by parsing the `content` property to the object
+     * When parse operation wasn't possible the property has assigned null
+     */
+    parameters: Record<string, any> | null;
     /** Available when tool has prompted out the output -> Agent will reason atop of it */
     toolOutput?: string;
 }
