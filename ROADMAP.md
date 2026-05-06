@@ -1,4 +1,4 @@
-1. Graph that supports:
+1. Graph that supports: (done)
     - Execution
         - Synchronous
         - Asynchronous
@@ -10,8 +10,8 @@
 2. Agents built as default as:
     - ReAct Agent
         Gives support to:
-        - System prompt - overall specification what has agent todo -> specified by the user - we give some wrapper atop of what user says
-        - User prompt - the task given to agent todo
+        - System prompt - overall specification what has agent todo -> specified by the user - we give some wrapper atop of what user says (done)
+        - User prompt - the task given to agent todo (done)
         - Multi-agents execution
         - Events Producing
         - GACP - Graph Agent communication protocol - communicate bevies of agents on graph
@@ -29,10 +29,11 @@
                     - A/B - user selects option
                     - Open - user types his answer
                 - Has waiting period to be setup as optional option - when given llm will ignore prior given task
-3. LLMs support
-    - Give standalone RunPod support to execute open-source models
-    - Support OpenAI
-4. Chat messages support - remembers chat messages
+3. LLMs support (done)
+    - Give standalone RunPod support to execute open-source models (done)
+    - Support OpenAI (done)
+4. Chat messages support - remembers chat messages 
     - User prompt
     - AI Answer
     - Tool usage
+5. Agentic RAG support 
