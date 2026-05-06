@@ -34,7 +34,9 @@ export class Anthropic implements StandardLLMShema {
     }
 
     private prepareMessages(): MessageParam[] {
-        return this.config.messages.map((message) => {
+        return this.config.messages
+            .filter((message) => message.type !== "system")
+            .map((message) => {
             switch (message.type) {
                 case "user":
                     return {
@@ -79,6 +81,19 @@ export class Anthropic implements StandardLLMShema {
                     } satisfies MessageParam;
             }
         });
+    }
+
+    private prepareSystemPrompt(): string | undefined {
+        const systemMessages = this.config.messages
+            .filter((message): message is { type: "system"; content: string } => message.type === "system")
+            .map((message) => message.content.trim())
+            .filter((content) => content.length > 0);
+
+        if (!systemMessages.length) {
+            return undefined;
+        }
+
+        return systemMessages.join("\n\n");
     }
 
     private prepareTools(): Tool[] {
@@ -143,6 +158,7 @@ export class Anthropic implements StandardLLMShema {
             return {
                 type: "tool",
                 tool_id: toolUse.id,
+                tool_name: toolUse.name,
                 content,
                 arguments: parseToolCallContentToParams(content)
             } satisfies ToolMessage;
@@ -193,6 +209,7 @@ export class Anthropic implements StandardLLMShema {
         const config: AnthropicStandalone.Messages.MessageCreateParamsNonStreaming = {
             model: this.config.model,
             max_tokens: this.config.max_tokens ?? 1024,
+            system: this.prepareSystemPrompt(),
             messages: this.prepareMessages(),
             tools: this.prepareTools(),
             thinking: this.config.thinking

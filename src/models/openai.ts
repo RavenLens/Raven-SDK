@@ -61,6 +61,11 @@ export class OpenAI implements StandardLLMShema {
     private prepareInput(): ResponsesAPI.ResponseInputItem[] {
         return this.config.messages.map((message => { // Parse messages to openai compatible format
             switch(message.type) {
+                case "system":
+                    return {
+                        role: "system",
+                        content: message.content
+                    } satisfies ResponsesAPI.EasyInputMessage
                 case "user":
                     return {
                         role: "user",
@@ -116,6 +121,7 @@ export class OpenAI implements StandardLLMShema {
             return {
                 type: "tool",
                 tool_id: toolCall.call_id,
+                tool_name: toolCall.name,
                 content: toolCall.input,
                 arguments: parseToolCallContentToParams(toolCall.input)
             } satisfies ToolMessage;

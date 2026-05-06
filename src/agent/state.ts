@@ -41,6 +41,8 @@ export interface ToolMessage {
     type: "tool";
     /** Otherwise the tool name for RavenADK specified tools */
     tool_id: string;
+    /** The declared tool name, available when provider returns both call id and tool name */
+    tool_name?: string;
     /**
      * The contents of the tool message from the LLM call
     */
@@ -56,7 +58,7 @@ export interface ToolMessage {
     toolError?: string
 }
 
-export type MessagesVariations = ReasoningMessage | UserMessage | AIMessage | ToolMessage;
+export type MessagesVariations = SystemMessage | ReasoningMessage | UserMessage | AIMessage | ToolMessage;
 
 export interface AgentMessagesGraphState {
     /** Includes order to call the tools for the `tools_node` */

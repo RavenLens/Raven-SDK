@@ -12,7 +12,7 @@ interface ReActAgentConfig<Skills extends SkillsFoundation, Knowledge extends Kn
     messages: MessagesVariations[];
     /**
      * Skills is the set of skills the agent can use to perform some action
-     * In CASCADE (https://arxiv.org/abs/2512.23880) secenario -> agent can develop his own skills
+     * In CASCADE (https://arxiv.org/abs/2512.23880) scenario -> agent can develop his own skills
     */
     skills?: Skills;
     /**
@@ -24,21 +24,45 @@ interface ReActAgentConfig<Skills extends SkillsFoundation, Knowledge extends Kn
 
 interface ReActAgentEvents {
     tool_invoked: (toolName: string, toolParams: Record<string, any>) => void | Promise<void>;
-    tool_executed: (toolName: string, toolParamse: Record<string, any>, output: string) => void | Promise<void>;
+    tool_executed: (toolName: string, toolParams: Record<string, any>, output: string) => void | Promise<void>;
     /** Is produced at the end of reasoning phase */
     reasoning_end: (thoughts: string) => void | Promise<void>;
-    /** When agent start to produce output */
+    /** When agent starts to produce output */
     result_producing_start: () => void | Promise<void>;
 }
 
-/** 
- * This node is suppose to: 
+interface ReActAgentInvokeResult {
+    messages: MessagesVariations[];
+    state: AgentMessagesGraphState;
+}
+
+export interface ReActAgentStreamChunk {
+    type: "reasoning" | "output";
+    content: string;
+}
+
+const REACT_SYSTEM_PROMPT = [
+    "You are RavenADK ReAct agent.",
+    "Follow the ReAct loop strictly:",
+    "1. Reason about the task and what information is missing.",
+    "2. Act by calling tools when external information or side-effects are required.",
+    "3. Observe tool outputs and continue reasoning from those observations.",
+    "4. Repeat Reason/Act/Observe until the task is solved or blocked.",
+    "5. Provide a final answer only when enough evidence is collected.",
+    "Tool usage rules:",
+    "- Never invent tool outputs.",
+    "- Prefer available tools over guessing.",
+    "- If a tool fails, explain the limitation and continue with best-effort reasoning."
+].join("\n");
+
+/**
+ * ReAct flow:
  * 1. Reason
  * 2. Make actions
- * 3. Execute tools -> by calling the -> add tool execution as last state message and call the `tools_node` 
- * 4. Reason above tool execution
- * 5. Produce output by calling the GraphMarkers.END -> TODO: graph node can call END to finish execution
- * 6. Register events to be called
+ * 3. Execute tools by calling `tools_node`, then append tool outputs as messages
+ * 4. Reason over tool execution results
+ * 5. Produce output by completing `main_node`, then graph continues to GraphMarkers.END
+ * 6. Emit events for reasoning and tool lifecycle
 */
 export class ReActAgent<Skills extends SkillsFoundation, Knowledge extends KnowledgeFoundation> {
     private AgentGraph: Graph<AgentMessagesGraphState>;
@@ -47,142 +71,139 @@ export class ReActAgent<Skills extends SkillsFoundation, Knowledge extends Knowl
 
     constructor(config: ReActAgentConfig<Skills, Knowledge>) {
         this.agentConfig = config;
+        this.ensureWrappedSystemPrompt();
+        this.synchronizeModelConfig();
 
-        // TODO: Add wrapper for system prompt to include behaviour for the agent
-        
-        // Define graph
-        const reactAgentGraph = new Graph<AgentMessagesGraphState>({})
+        const reactAgentGraph = new Graph<AgentMessagesGraphState>({});
+
         reactAgentGraph
             .addNode("main_node", async state => {
-                if (state.callTools) { // Retrive executed tools
-                    // Asssign the tools output to the messages of agent
+                let currentState = state;
+
+                // Resolve tools
+                if (state.callTools?.tools.length) {
                     this.agentConfig.messages = [
                         ...this.agentConfig.messages,
-                        ...state.callTools.recentModelAnswers.map(answerMsg => {
-                            if (answerMsg.type === "tool") {
-                                const toolExecutedFound = state.callTools!.tools.find(toolCall => toolCall.tool_id === answerMsg.tool_id);
-                                if (!toolExecutedFound) {
-                                    return {
-                                        ...answerMsg,
-                                        toolError: "Tool doesn't exist on tools execution list"
-                                    }
-                                }
+                        ...state.callTools.tools.map(toolMessage => ({
+                            ...toolMessage,
+                            content: toolMessage.toolOutput ?? toolMessage.content
+                        }))
+                    ];
 
-                                return toolExecutedFound;
-                            }
-                            else return answerMsg
-                        })
-                    ]
-                    
-                    // Reset tools call after all processing
-                    delete state.callTools
+                    const { callTools, ...stateWithoutCallTools } = state;
 
-                    // Update state
                     return {
                         callNode: "main_node",
                         stateUpdate: {
-                            ...state,
-                            // Attach to signalize in main flow that tools retrived the result
-                            toolsOutputRetrived: true 
+                            ...stateWithoutCallTools,
+                            toolsOutputRetrived: true
                         }
-                    }
+                    };
                 }
-                else { // main_flow of the agent
-                    if (state.toolsOutputRetrived) {
-                        this.agentConfig.messages = [
-                            ...this.agentConfig.messages,
-                            {
-                                type: "ai",
-                                content: "Tools were executed. View the result and continue reasoning for user specified task"
-                            }
-                        ];
 
-                        delete state.toolsOutputRetrived;
-                    }
-                    
-                    // TODO: Add some message will help agent to recall himself otherwise it will be guided to the end where the last message has to be ai assistant message always
-                    const modelInvoke = await this.agentConfig.model.invoke({ messages: this.agentConfig.messages });
-                    
-                    // Call tools when tools were specified
-                    const toolAnswers = modelInvoke.answer.filter(answerMsg => answerMsg.type === "tool");
-                    if (toolAnswers.length) { // Call all tools from agent
-                        return {
-                            callNode: "tools_node",
-                            stateUpdate: {
-                                callTools: {
-                                    tools: toolAnswers,
-                                    recentModelAnswers: modelInvoke.answer
-                                }
-                            }
-                        }
-                    }
+                // 
+                if (state.toolsOutputRetrived) {
+                    const { toolsOutputRetrived, ...stateWithoutToolFlag } = state;
+                    currentState = stateWithoutToolFlag;
+                }
 
-                    // Update recent messages are the agent answers
-                    this.agentConfig.messages = modelInvoke.messages;
+                const modelInvoke = await this.agentConfig.model.invoke({
+                    messages: this.agentConfig.messages
+                });
+                this.agentConfig.messages = modelInvoke.messages;
 
-                    // Update state
+                const reasoningMessages = modelInvoke.answer
+                    .filter((answerMsg): answerMsg is Extract<MessagesVariations, { type: "thinking" }> => answerMsg.type === "thinking")
+                    .map((thought) => thought.content)
+                    .join("\n\n")
+                    .trim();
+
+                if (reasoningMessages.length > 0) {
+                    this.emitEvent("reasoning_end", reasoningMessages);
+                }
+
+                const toolAnswers = modelInvoke.answer.filter(
+                    (answerMsg): answerMsg is Extract<MessagesVariations, { type: "tool" }> => answerMsg.type === "tool"
+                );
+
+                if (toolAnswers.length) {
                     return {
-                        stateUpdate: state
-                    }
+                        callNode: "tools_node",
+                        stateUpdate: {
+                            ...currentState,
+                            callTools: {
+                                tools: toolAnswers,
+                                recentModelAnswers: modelInvoke.answer
+                            }
+                        }
+                    };
                 }
+
+                const hasFinalOutput = modelInvoke.answer.some(
+                    answerMsg => answerMsg.type === "ai" && !!answerMsg.content?.trim()
+                );
+
+                if (hasFinalOutput) {
+                    this.emitEvent("result_producing_start");
+                }
+
+                return {
+                    stateUpdate: currentState
+                };
             })
             .addNode("tools_node", async state => {
-                /**
-                 * This node is going to execute tools -> add result of tool call to the last message and call back the `main_node`
-                */
                 if (state.callTools?.tools.length) {
-                    // Execute tools in parallel
                     const { tools: definedTools } = this.agentConfig;
-                    const { tools: callTools } = state.callTools;
+                    const definedToolsByName = new Map(
+                        definedTools.map((definedTool) => [definedTool.toolConfig.toolName, definedTool])
+                    );
 
-                    // Prepare tools to call
-                    const foundDefinedTools = definedTools.map(defTool => {
-                        const callToolFound = callTools.find(toolCall => toolCall.tool_id === defTool.toolConfig.toolName);
+                    const toolsStatePrepared = await Promise.all(
+                        state.callTools.tools.map(async tool => {
+                            const toolName = tool.tool_name ?? tool.tool_id;
+                            const definedTool = definedToolsByName.get(toolName);
+                            const toolParams = tool.arguments ?? {};
 
-                        // FIXME: Someday verify the arguments of the tool to with what was tool execute
-                        const desiredArgumentsSchema = defTool.toolConfig.toolArguments;
+                            if (!definedTool) {
+                                const missingToolError = `Tool couldn't be executed because tool with name "${toolName}" does not exist`;
 
-                        if (callToolFound) {
-                            return {
-                                ...defTool,
-                                invokeWithArguments: callToolFound?.arguments
-                            };
-                        }
+                                return {
+                                    ...tool,
+                                    tool_name: toolName,
+                                    toolError: missingToolError,
+                                    toolOutput: missingToolError,
+                                    content: missingToolError
+                                };
+                            }
 
-                        return;
-                    }).filter(tool => tool !== undefined);
+                            this.emitEvent("tool_invoked", toolName, toolParams);
 
-                    // Find tools were desired to call but doesn't exists on tools list
-                    const toolsDoesNotExist = callTools.filter(toolCall => !definedTools.some(defTool => defTool.toolConfig.toolName !== toolCall.tool_id));
+                            try {
+                                const toolOutput = await definedTool.invoke(toolParams as never);
+                                this.emitEvent("tool_executed", toolName, toolParams, toolOutput);
 
-                    // Execute tools in concurrency
-                    const executedTools = await Promise.all(
-                        foundDefinedTools.map(fDefTool => {
-                            return new Promise<typeof fDefTool & { output: string }>(async res => {
-                                const executedOutput = await fDefTool.toolLogic(fDefTool.invokeWithArguments)
-                                
-                                // FIXME: Validate schema someday
-                                const desiredOutputSchema = fDefTool.toolConfig.toolOutputSchema
+                                return {
+                                    ...tool,
+                                    tool_name: toolName,
+                                    toolError: undefined,
+                                    toolOutput,
+                                    content: toolOutput
+                                };
+                            } catch (error) {
+                                const errorMessage = error instanceof Error ? error.message : "Unknown tool execution error";
+                                const toolFailureOutput = `Tool "${toolName}" failed during execution: ${errorMessage}`;
 
-                                res({
-                                    ...fDefTool,
-                                    output: executedOutput
-                                });
-                            });
+                                return {
+                                    ...tool,
+                                    tool_name: toolName,
+                                    toolError: errorMessage,
+                                    toolOutput: toolFailureOutput,
+                                    content: toolFailureOutput
+                                };
+                            }
                         })
                     );
 
-                    // Assign to state output `tools` the executed results
-                    const toolsStatePrepared = state.callTools.tools.map(tool => {
-                        const isToolOnListOfToolsDoesNotExist = () => toolsDoesNotExist.some(toolDNE => toolDNE.tool_id === tool.tool_id)
-                        
-                        return {
-                            ...tool,
-                            toolOutput: executedTools.find(exToolOutput => exToolOutput.toolConfig.toolName === tool.tool_id)?.output ?? (isToolOnListOfToolsDoesNotExist() ? `Tool couldn't be executed. This is because of tool with this name "${tool.tool_id}" doesn't exist` : "Tool from some of reason couldn't be executed. Try to make action again or use different tool")
-                        };
-                    });
-
-                    // Return execution back to the `main_node`
                     return {
                         callNode: "main_node",
                         stateUpdate: {
@@ -192,23 +213,55 @@ export class ReActAgent<Skills extends SkillsFoundation, Knowledge extends Knowl
                                 tools: toolsStatePrepared
                             }
                         }
-                    }
+                    };
                 }
-                else return {
+
+                return {
                     callNode: "main_node",
                     stateUpdate: {
-                        ...state
+                        ...state,
+                        callTools: undefined
                     }
-                }
+                };
             })
             .addEdge(GraphMarkers.START, "main_node")
             .addEdge("main_node", GraphMarkers.END);
-            // End don't have to be defined similary as the tools_node since these will be called dynamically
 
         this.AgentGraph = reactAgentGraph;
     }
 
-    onEvent<EventName extends keyof ReActAgentEvents>(eventName: EventName, eventListener: ReActAgentEvents[EventName]): this {
+    private buildWrappedSystemPrompt(userSystemPrompt: string): string {
+        const cleanedUserPrompt = userSystemPrompt.trim();
+
+        if (!cleanedUserPrompt.length) {
+            return REACT_SYSTEM_PROMPT;
+        }
+
+        return `${REACT_SYSTEM_PROMPT}\n\nUser system prompt:\n${cleanedUserPrompt}`;
+    }
+
+    private ensureWrappedSystemPrompt(): void {
+        const wrappedSystemPrompt = this.buildWrappedSystemPrompt(this.agentConfig.systemPrompt);
+        const nonSystemMessages = this.agentConfig.messages.filter(message => message.type !== "system");
+
+        this.agentConfig.messages = [
+            {
+                type: "system",
+                content: wrappedSystemPrompt
+            },
+            ...nonSystemMessages
+        ];
+    }
+
+    private synchronizeModelConfig(): void {
+        this.agentConfig.model.config.tools = this.agentConfig.tools;
+        this.agentConfig.model.config.messages = this.agentConfig.messages;
+    }
+
+    onEvent<EventName extends keyof ReActAgentEvents>(
+        eventName: EventName,
+        eventListener: ReActAgentEvents[EventName]
+    ): this {
         if (this.EventsListeners[eventName]) {
             console.warn(`Event listener for "${eventName}" is already registered. Only one listener per event name is allowed.`);
             return this;
@@ -218,7 +271,10 @@ export class ReActAgent<Skills extends SkillsFoundation, Knowledge extends Knowl
         return this;
     }
 
-    protected emitEvent<EventName extends keyof ReActAgentEvents>(eventName: EventName, ...eventArgs: Parameters<ReActAgentEvents[EventName]>) {
+    protected emitEvent<EventName extends keyof ReActAgentEvents>(
+        eventName: EventName,
+        ...eventArgs: Parameters<ReActAgentEvents[EventName]>
+    ) {
         const eventListener = this.EventsListeners[eventName];
 
         if (!eventListener) {
@@ -232,24 +288,52 @@ export class ReActAgent<Skills extends SkillsFoundation, Knowledge extends Knowl
         });
     }
 
-    /** TODO: 
-     * Use to invoke the specified agent
-    */
-    async invoke() {
+    async invoke(): Promise<ReActAgentInvokeResult> {
+        this.ensureWrappedSystemPrompt();
+        this.synchronizeModelConfig();
+        this.AgentGraph.graphState = {};
 
+        await this.AgentGraph.start();
+
+        this.synchronizeModelConfig();
+
+        return {
+            messages: this.agentConfig.messages,
+            state: this.AgentGraph.getState()
+        };
     }
 
-    /** TODO: 
-     * In this mode agent stream will be produced for the
-     * Final Output -> where each token is streamlined 
-     * Reasoning tokens - when model is reasoning its tokens are streamed one by one
-    */
-    async invokeStream() {
+    async invokeStream(): Promise<AsyncIterable<ReActAgentStreamChunk>> {
+        const previousLength = this.agentConfig.messages.length;
+        const invocationResult = await this.invoke();
 
+        const streamMessages = invocationResult.messages
+            .slice(previousLength)
+            .filter((message) => message.type === "thinking" || (message.type === "ai" && !!message.content?.trim()));
+
+        const streamGenerator = async function* (): AsyncGenerator<ReActAgentStreamChunk> {
+            for (const message of streamMessages) {
+                if (message.type === "thinking") {
+                    yield {
+                        type: "reasoning",
+                        content: message.content
+                    };
+                    continue;
+                }
+
+                if (message.type === "ai" && message.content) {
+                    yield {
+                        type: "output",
+                        content: message.content
+                    };
+                }
+            }
+        };
+
+        return streamGenerator();
     }
-  
+
     public get messages() {
         return this.agentConfig.messages;
     }
-    
 }
