@@ -5,7 +5,8 @@ import { OpenAI } from "../models/openai";
 import { SchemaMemoryStore } from "./memory/schema";
 import { SchemaSkillStore } from "./skills/stores/schema";
 import { AgentMessagesGraphState, MessagesVariations } from "./state";
-import { Tool } from "./tools";
+import { MCPTool } from "./tools/mcpTools";
+import { Tool } from "./tools/tools";
 
 interface ReActAgentConfig<Skills extends SchemaSkillStore, Memory extends SchemaMemoryStore> {
     model: OpenAI | Anthropic;
@@ -293,7 +294,9 @@ export class ReActAgent<Skills extends SchemaSkillStore, Memory extends SchemaMe
                             this.emitEvent("tool_invoked", toolName, toolParams);
 
                             try {
-                                const toolOutput = await definedTool.invoke(toolParams as never);
+                                const toolOutput = definedTool instanceof MCPTool
+                                    ? await definedTool.invokeFromMCP((toolParams ?? {}) as Record<string, unknown>)
+                                    : await definedTool.invoke(toolParams as never);
                                 this.emitEvent("tool_executed", toolName, toolParams, toolOutput);
 
                                 return {

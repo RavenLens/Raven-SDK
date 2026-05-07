@@ -1,7 +1,7 @@
 import { InvokeOptions, LLMAnswer, LLMConfig, StandardLLMShema } from "./mutual";
 import { OpenAI as OpenAIStandalone } from 'openai';
 import type * as ResponsesAPI from "openai/resources/responses/responses";
-import { parseToolCallContentToParams, parseToolDescription } from "../agent/tools";
+import { parseToolCallContentToParams, parseToolDescription } from "../agent/tools/tools";
 import { AIMessage, ToolMessage } from "../agent/state";
 import { ReasoningEffort } from "openai/resources";
 

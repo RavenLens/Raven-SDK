@@ -1,7 +1,7 @@
 import { InvokeOptions, LLMAnswer, LLMConfig, StandardLLMShema } from "./mutual";
 import { Anthropic as AnthropicStandalone } from '@anthropic-ai/sdk';
 import { MessageParam, Tool, ToolUseBlock } from "@anthropic-ai/sdk/resources/messages";
-import { parseToolCallContentToParams, parseToolDescription } from "../agent/tools";
+import { parseToolCallContentToParams, parseToolDescription } from "../agent/tools/tools";
 import { AIMessage, ReasoningMessage, ToolMessage } from "../agent/state";
 import * as z from "zod";
 import { ThinkingConfigParam } from "@anthropic-ai/sdk/resources";

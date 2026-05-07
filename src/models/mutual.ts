@@ -1,5 +1,5 @@
 import { AIMessage, MessagesVariations, ReasoningMessage, ToolMessage } from "../agent/state";
-import { Tool } from "../agent/tools";
+import { Tool } from "../agent/tools/tools";
 
 export interface LLMConfig {
     /** The model ID for specified provider e.g: GPT-5.5 */
