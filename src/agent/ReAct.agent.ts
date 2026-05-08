@@ -92,7 +92,7 @@ type ReActAgentStreamListener = (event: ReActAgentStreamChunk) => void;
 const RECALL_MAIN_NODE_PREFIX = "[[RAVEN_RECALL_MAIN_NODE]]";
 const DEFAULT_MAX_REASONING_RECALLS = 3;
 let REACT_SYSTEM_PROMPT = [
-    "You are RavenADK ReAct agent.",
+    "Ultimate statement: You are RavenADK ReAct agent.",
     "Follow the ReAct loop strictly:",
     "1. Reason about the task and what information is missing.",
     "2. Act by calling tools when external information or side-effects are required.",
@@ -132,6 +132,8 @@ export class ReActAgent<Skills extends SchemaSkillStore, Memory extends SchemaMe
     private StreamListeners: Set<ReActAgentStreamListener> = new Set();
     agentConfig: ReActAgentConfig<Skills, Memory>;
     agentSkillsInterface: SkillsInterface<Skills> | undefined = undefined;
+    /** It's overall amount of used tokens by the ReAct agent */
+    usedTokens: LLMAnswer["tokens"];
 
     constructor(config: ReActAgentConfig<Skills, Memory>) {
         this.agentConfig = {
@@ -143,17 +145,32 @@ export class ReActAgent<Skills extends SchemaSkillStore, Memory extends SchemaMe
             ...config.skills.config,
             skillStorage: config.skills
         }) : undefined;
+        this.usedTokens = {
+            input: 0,
+            output: 0,
+            reasoning: 0
+        };
 
         // Add skills exploration feature to standalone agent
         if (this.agentSkillsInterface) {
+            const exploreSkillTools = this.agentSkillsInterface.createExploreSkillsAgentTools();
+            const executeSkillTools = this.agentSkillsInterface.createSkillScriptExecuteTools();
+            const managementSkillsTools = this.agentSkillsInterface?.createManageSkillAgentTools();
+            
             // Skills explore. tools prep
             this.agentConfig.tools = [
                 ...this.agentConfig.tools,
-                ...(this.agentSkillsInterface ? this.agentSkillsInterface.createExploreSkillsAgentTools() : [])
+                ...(this.agentSkillsInterface ? [...exploreSkillTools, ...executeSkillTools, ...managementSkillsTools] : [])
             ];
 
             // Add Skills exploration system prompt
             REACT_SYSTEM_PROMPT += `\n\nExplore your skills and use them according to this specification:\n${SkillsInterface.exploreSkillsPrompt}`;
+
+            // Add skills script execution system prompt
+            REACT_SYSTEM_PROMPT += `\n\nExecute skill scripts and CLI commands according to this specification:\n${SkillsInterface.executeSkillScriptsPrompt}`;
+            
+            // Add skills management system prompt
+            REACT_SYSTEM_PROMPT += `\n\nCreate and manage skills as needed according to this specification:\n${SkillsInterface.createSkillsPrompt}`;
         }
 
         // Preparation
@@ -198,6 +215,7 @@ export class ReActAgent<Skills extends SchemaSkillStore, Memory extends SchemaMe
                     messages: this.agentConfig.messages
                 });
 
+                this.calculateUsedTokens(modelInvoke);
                 this.agentConfig.messages = modelInvoke.messages;
                 this.emitEvent("llm_result", modelInvoke);
 
@@ -271,14 +289,6 @@ export class ReActAgent<Skills extends SchemaSkillStore, Memory extends SchemaMe
 
                 // TODO: Remember new things to Memory when necessary
 
-                // TODO: Make new skills when necessary
-                // Skills are make at the end of action
-                if (this.agentConfig.skills?.config.dynamicSkillCreation) {
-                    const managementSkillsTools = this.agentSkillsInterface?.createManageSkillAgentTools();
-
-                    // TODO: Make Agent to analyse chat history and make skills accroding to conditions -> agent has to analyse skills and create them as needed
-                }
-                
                 // Check is the output the ai assistant
                 const hasFinalOutput = modelInvoke.answer.some(
                     answerMsg => answerMsg.type === "ai" && !!answerMsg.content?.trim()
@@ -485,6 +495,7 @@ export class ReActAgent<Skills extends SchemaSkillStore, Memory extends SchemaMe
             const conclusionResult = await this.agentConfig.model.invoke({
                 messages: this.agentConfig.model.config.messages
             });
+            this.calculateUsedTokens(conclusionResult);
 
             this.emitEvent("llm_result", conclusionResult);
 
@@ -624,6 +635,14 @@ export class ReActAgent<Skills extends SchemaSkillStore, Memory extends SchemaMe
         void Promise.resolve((listener as any)(...eventArgs)).catch((error) => {
             console.warn(`Event listener for "${String(eventName)}" failed during execution.`, error);
         });
+    }
+
+    calculateUsedTokens(llmAnswer: LLMAnswer) {
+        this.usedTokens = {
+            input: this.usedTokens.input + llmAnswer.tokens.input,
+            output: this.usedTokens.output + llmAnswer.tokens.output,
+            reasoning: this.usedTokens.reasoning + llmAnswer.tokens.reasoning
+        };
     }
 
     async invoke(): Promise<ReActAgentInvokeResult> {

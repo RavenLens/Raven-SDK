@@ -1,8 +1,27 @@
 // TODO: Develop Skills Shape and stores like localPersistant, localTemporary, Redis, MongoDB
 // TODO: Develop cascade skills
+import { spawn } from "node:child_process";
+import fs from "node:fs";
+import path from "node:path";
 import z from "zod";
 import { tool, Tool } from "../tools/tools";
 import { SchemaSkillStore, SkillFileEntryWithContent } from "./stores/schema";
+
+type SkillScriptRuntime = "auto" | "node" | "python" | "powershell" | "bash" | "cmd";
+
+interface CommandExecutionResult {
+    success: boolean;
+    command: string;
+    args: string[];
+    cwd: string;
+    exitCode: number | null;
+    timedOut: boolean;
+    stdout: string;
+    stderr: string;
+    truncatedStdout: boolean;
+    truncatedStderr: boolean;
+    error?: string;
+}
 
 export interface SkillSharedConfig {
     /**
@@ -34,6 +53,7 @@ export interface SkillConfig<SkillStorage extends SchemaSkillStore> extends Skil
 interface SkillsFoundation<SkillStorage extends SchemaSkillStore> {
     config: SkillConfig<SkillStorage>;
     createExploreSkillsAgentTools(): Tool<any, any>[];
+    createSkillScriptExecuteTools(): Tool<any, any>[];
     createExploreSkillsAgentTools(): Tool<any, any>[];
     api: SkillConfig<SkillStorage>["skillStorage"]
 }
@@ -41,8 +61,18 @@ interface SkillsFoundation<SkillStorage extends SchemaSkillStore> {
 export class Skills<SkillStorage extends SchemaSkillStore> implements SkillsFoundation<SkillStorage> {
     config: SkillConfig<SkillStorage>;
     static exploreSkillsPrompt: string = [
-        "Your mission is to discover, inspect, and explain skills in a format compatible with the Open Skills standard: https://agentskills.io/home.",
-        "Use only the provided explore tools and follow their argument schemas exactly.",
+        "You are RavenADK Skills Explorer.",
+        "Your mission is to discover, inspect, and reuse skills in a format compatible with the Open Skills standard: https://agentskills.io/home.",
+        "Use only the provided skill tools and follow their argument schemas exactly.",
+        "",
+        "Why to use skills in a ReAct workflow:",
+        "- Skills reduce repeated reasoning, increase consistency, and keep execution grounded in verified instructions.",
+        "- Skills should be checked before inventing a new approach for a task that may already be solved.",
+        "",
+        "When to explore skills:",
+        "- Before solving a non-trivial task, especially if it looks repeatable or procedural.",
+        "- Before creating a new skill candidate, to avoid duplicates or near-duplicates.",
+        "- After tool outputs reveal uncertainty about the correct process.",
         "",
         "Available explore tools:",
         "1) skill_folder_discover",
@@ -53,28 +83,71 @@ export class Skills<SkillStorage extends SchemaSkillStore> implements SkillsFoun
         "   - Purpose: read only SKILL.md frontmatter metadata for a skill folder/file path.",
         "3) skill_full_read",
         "   - Arguments: { fromLocation?: string }",
-        "   - Purpose: read full file content of `Skill.md`, script, assets, documentation and more of the skill folder. Read the Skill.md first if you're not instruct to do differently -> do this to understand the skill functionality and structure.",
+        "   - Purpose: read full SKILL.md content for complete skill understanding.",
         "",
-        "Exploration workflow:",
-        "- First call skill_folder_discover to map wards, skills, and support folders.",
-        "- For candidate skills, call skill_meta_read first for fast routing.",
-        "- Call skill_full_read only when full instructions are needed.",
-        "- Treat empty responses as not-found or missing SKILL.md and continue discovery instead of guessing.",
+        "How to explore and reuse (ReAct-compatible loop):",
+        "- Reason: identify what capability is needed.",
+        "- Act: call skill_folder_discover to map candidate wards and skills.",
+        "- Act: call skill_meta_read on likely matches for quick filtering.",
+        "- Act: call skill_full_read only for finalists before applying instructions.",
+        "- Observe: compare discovered capability to current objective and continue only with evidence.",
+        "- If no suitable skill is confirmed, continue task execution and only then consider creation policy.",
         "",
         "Open Skills alignment rules:",
-        "- The canonical skill definition should be in SKILL.md.",
-        "- Prefer structure: <skill>/SKILL.md with optional scripts, references, assets.",
+        "- The canonical skill definition is SKILL.md.",
+        "- Preferred structure is <skill>/SKILL.md with optional scripts, references, assets, and documentation.",
         "- Keep interpretations grounded in file content; do not invent metadata or capabilities.",
         "",
         "Output policy:",
-        "- Summarize discovered skill hierarchy and capabilities.",
+        "- Summarize discovered skill hierarchy and candidate matches.",
         "- Explicitly mention uncertainty when metadata/full content is unavailable.",
         "- Never claim a skill exists without evidence from discover/read tools."
+    ].join("\n");
+    static executeSkillScriptsPrompt: string = [
+        "You are RavenADK Skill Script Executor.",
+        "Your mission is to execute verified skill scripts through command-line tools and report outputs as evidence.",
+        "Use only the provided script execution tools and follow argument schemas exactly.",
+        "",
+        "Why execution tools exist in ReAct:",
+        "- Some skills include executable scripts that produce evidence, artifacts, or deterministic outputs.",
+        "- Script execution should be used when reading instructions is not enough and real execution is required.",
+        "",
+        "When to execute:",
+        "- After discovering a candidate skill and confirming script intent from SKILL.md or related files.",
+        "- When the task requires concrete runtime output, not just planning.",
+        "- Prefer execution only after inputs and working directory are clear.",
+        "",
+        "Available execution tools:",
+        "1) skill_script_run",
+        "   - Arguments: { scriptLocation: string, runtime?: auto|node|python|powershell|bash|cmd, scriptArgs?: string[], workingDirectory?: string, timeoutMs?: number }",
+        "   - Purpose: run a script file by path, with runtime autodetection or explicit runtime override.",
+        "2) skill_cli_execute",
+        "   - Arguments: { command: string, args?: string[], workingDirectory?: string, timeoutMs?: number }",
+        "   - Purpose: run a direct command-line command when script wrappers or custom commands are needed.",
+        "",
+        "Safe execution workflow:",
+        "- Discover/read skill first, then execute; do not run unrelated commands.",
+        "- Start with minimal arguments and bounded timeout.",
+        "- Treat non-zero exit codes and stderr as observations to reason over, not silent failures.",
+        "- Do not fabricate execution success when command fails.",
+        "",
+        "Output policy:",
+        "- Report command, arguments, cwd, exit code, stdout/stderr excerpts, and timeout state.",
+        "- Use tool output as evidence for the final answer or next action."
     ].join("\n");
     static createSkillsPrompt: string = [
         "You are RavenADK Skills Curator.",
         "Your mission is to create, organize, relocate, and remove skills in RavenADK while keeping Open Skills compatibility: https://agentskills.io/home.",
         "Use only the provided management/exploration tools and respect each tool schema exactly.",
+        "",
+        "Why skill creation exists in ReAct:",
+        "- Capture newly developed, reusable know-how discovered while solving real tasks.",
+        "- Improve future task quality by turning proven procedures into reusable skills.",
+        "",
+        "When creation is allowed (strict gate):",
+        "- Create a skill only after exploration confirms no same or meaningfully similar skill already exists.",
+        "- Create a skill only after the agent has developed or validated a reusable process during the current task.",
+        "- Do not create speculative, empty, or duplicate skills.",
         "",
         "Creation and management tools:",
         "1) skill_folder_create",
@@ -95,17 +168,15 @@ export class Skills<SkillStorage extends SchemaSkillStore> implements SkillsFoun
         "",
         "Exploration helpers available in the same runtime:",
         "- skill_folder_discover, skill_meta_read, skill_full_read.",
-        "Use these to verify results after each mutation.",
+        "Use these before creation for deduplication, and after mutation for verification.",
         "",
-        "RavenADK and Open Skills creation policy:",
+        "How to create and manage (safe, universal workflow):",
+        "- Discover target ward and potential duplicates before any write/remove/relocate call.",
         "- For a new skill, create a skill folder first, then create SKILL.md as the canonical skill file.",
-        "- Use skill_file_create with type=skill and fileName=SKILL.md for the core skill definition.",
-        "- Keep supporting files in scripts/references/assets with matching type values.",
-        "- Ensure metadata/frontmatter in SKILL.md is valid and informative for routing.",
-        "",
-        "Safe mutation workflow:",
-        "- Discover target location before any write/remove/relocate call.",
-        "- After each mutation, validate by re-discovering and reading metadata/full skill as needed.",
+        "- Use skill_file_create with type=skill and fileName=SKILL.md for the core definition.",
+        "- Keep supporting files in scripts/references/assets/documentation with matching type values.",
+        "- Ensure SKILL.md metadata/frontmatter is valid, specific, and useful for routing.",
+        "- After each mutation, re-discover and re-read metadata/full skill to confirm expected state.",
         "- Do not perform destructive removal when target path is ambiguous.",
         "",
         "Execution policy:",
@@ -313,6 +384,378 @@ export class Skills<SkillStorage extends SchemaSkillStore> implements SkillsFoun
         }
 
         return toolsSet;
+    }
+
+    /**
+     * Set of tools to execute scripts of skills
+    */
+    createSkillScriptExecuteTools(): Tool<any, any>[] {
+        const executeTools: Tool<any, any>[] = [];
+
+        type ExecuteSkillScriptArgs = {
+            scriptLocation: string;
+            runtime?: SkillScriptRuntime;
+            scriptArgs?: string[];
+            workingDirectory?: string;
+            timeoutMs?: number;
+        };
+
+        executeTools.push(
+            tool(
+                async ({ scriptLocation, runtime, scriptArgs, workingDirectory, timeoutMs }) => {
+                    const resolvedScriptPath = this.resolveScriptPath(scriptLocation, workingDirectory);
+
+                    if (!resolvedScriptPath) {
+                        return JSON.stringify({
+                            success: false,
+                            error: `Script path could not be resolved: "${scriptLocation}"`,
+                            scriptLocation
+                        }, null, 2);
+                    }
+
+                    const preparedCommand = this.prepareScriptRuntimeCommand(
+                        runtime ?? "auto",
+                        resolvedScriptPath,
+                        scriptArgs ?? []
+                    );
+
+                    if ("error" in preparedCommand) {
+                        return JSON.stringify({
+                            success: false,
+                            error: preparedCommand.error,
+                            scriptLocation,
+                            resolvedScriptPath
+                        }, null, 2);
+                    }
+
+                    const executionResult = await this.executeCommandLine(
+                        preparedCommand.command,
+                        preparedCommand.args,
+                        {
+                            timeoutMs,
+                            workingDirectory: workingDirectory ?? path.dirname(resolvedScriptPath)
+                        }
+                    );
+
+                    return JSON.stringify({
+                        ...executionResult,
+                        scriptLocation,
+                        resolvedScriptPath,
+                        runtime: runtime ?? "auto"
+                    }, null, 2);
+                },
+                {
+                    toolName: "skill_script_run",
+                    toolDescription: "Use to execute a skill script file by location, with runtime autodetection or explicit runtime override.",
+                    toolArguments: z.object({
+                        scriptLocation: z.string().describe("Location/path to a script file to execute."),
+                        runtime: z.enum(["auto", "node", "python", "powershell", "bash", "cmd"]).optional().describe("Script runtime. Defaults to auto-detection from file extension."),
+                        scriptArgs: z.array(z.string()).optional().describe("Optional script arguments passed to the script."),
+                        workingDirectory: z.string().optional().describe("Optional command working directory. Defaults to script folder."),
+                        timeoutMs: z.number().int().min(1_000).max(300_000).optional().describe("Optional timeout in milliseconds. Default is 45_000.")
+                    } satisfies Record<keyof ExecuteSkillScriptArgs, any>)
+                }
+            )
+        );
+
+        type ExecuteCLIArgs = {
+            command: string;
+            args?: string[];
+            workingDirectory?: string;
+            timeoutMs?: number;
+        };
+
+        executeTools.push(
+            tool(
+                async ({ command, args, workingDirectory, timeoutMs }) => {
+                    const executionResult = await this.executeCommandLine(command, args ?? [], {
+                        timeoutMs,
+                        workingDirectory
+                    });
+
+                    return JSON.stringify(executionResult, null, 2);
+                },
+                {
+                    toolName: "skill_cli_execute",
+                    toolDescription: "Use to execute a direct command-line command when script wrappers or custom command invocations are needed.",
+                    toolArguments: z.object({
+                        command: z.string().describe("Executable/command name to run, such as node, python, bash, or npm."),
+                        args: z.array(z.string()).optional().describe("Optional command arguments list."),
+                        workingDirectory: z.string().optional().describe("Optional command working directory. Defaults to current process directory."),
+                        timeoutMs: z.number().int().min(1_000).max(300_000).optional().describe("Optional timeout in milliseconds. Default is 45_000.")
+                    } satisfies Record<keyof ExecuteCLIArgs, any>)
+                }
+            )
+        );
+
+        return executeTools;
+    }
+
+    private normalizeLocation(location?: string): string {
+        if (!location) {
+            return "";
+        }
+
+        return location
+            .replace(/\\/g, "/")
+            .replace(/^\/+/, "")
+            .replace(/\/+$/, "");
+    }
+
+    private resolveScriptPath(scriptLocation: string, workingDirectory?: string): string | null {
+        const normalizedScriptLocation = scriptLocation.trim();
+
+        if (!normalizedScriptLocation.length) {
+            return null;
+        }
+
+        const candidates = new Set<string>();
+        const addCandidate = (candidatePath: string) => {
+            candidates.add(path.resolve(candidatePath));
+        };
+
+        if (path.isAbsolute(normalizedScriptLocation)) {
+            addCandidate(normalizedScriptLocation);
+        }
+
+        if (workingDirectory?.trim()) {
+            addCandidate(path.join(workingDirectory, normalizedScriptLocation));
+        }
+
+        addCandidate(path.join(process.cwd(), normalizedScriptLocation));
+
+        const normalizedSession = this.normalizeLocation(this.config.session);
+        const skillsRoot = normalizedSession.length > 0
+            ? path.join(process.cwd(), "skills", ...normalizedSession.split("/"))
+            : path.join(process.cwd(), "skills");
+
+        addCandidate(path.join(skillsRoot, normalizedScriptLocation));
+
+        for (const candidatePath of candidates) {
+            if (!fs.existsSync(candidatePath)) {
+                continue;
+            }
+
+            if (!fs.statSync(candidatePath).isFile()) {
+                continue;
+            }
+
+            return candidatePath;
+        }
+
+        return null;
+    }
+
+    private prepareScriptRuntimeCommand(
+        runtime: SkillScriptRuntime,
+        scriptPath: string,
+        scriptArgs: string[]
+    ): { command: string; args: string[] } | { error: string } {
+        const normalizedRuntime = runtime.toLowerCase() as SkillScriptRuntime;
+
+        if (normalizedRuntime !== "auto") {
+            return this.prepareExplicitRuntimeCommand(normalizedRuntime, scriptPath, scriptArgs);
+        }
+
+        const extension = path.extname(scriptPath).toLowerCase();
+
+        if ([".js", ".cjs", ".mjs"].includes(extension)) {
+            return { command: "node", args: [scriptPath, ...scriptArgs] };
+        }
+
+        if (extension === ".py") {
+            return { command: "python", args: [scriptPath, ...scriptArgs] };
+        }
+
+        if (extension === ".ps1") {
+            return {
+                command: "powershell",
+                args: ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", scriptPath, ...scriptArgs]
+            };
+        }
+
+        if (extension === ".sh") {
+            return { command: "bash", args: [scriptPath, ...scriptArgs] };
+        }
+
+        if ([".cmd", ".bat"].includes(extension)) {
+            return { command: "cmd", args: ["/c", scriptPath, ...scriptArgs] };
+        }
+
+        return {
+            error: `Unsupported script extension "${extension || "<none>"}" for runtime=auto. Set explicit runtime or use skill_cli_execute.`
+        };
+    }
+
+    private prepareExplicitRuntimeCommand(
+        runtime: Exclude<SkillScriptRuntime, "auto">,
+        scriptPath: string,
+        scriptArgs: string[]
+    ): { command: string; args: string[] } {
+        if (runtime === "node") {
+            return { command: "node", args: [scriptPath, ...scriptArgs] };
+        }
+
+        if (runtime === "python") {
+            return { command: "python", args: [scriptPath, ...scriptArgs] };
+        }
+
+        if (runtime === "powershell") {
+            return {
+                command: "powershell",
+                args: ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", scriptPath, ...scriptArgs]
+            };
+        }
+
+        if (runtime === "bash") {
+            return { command: "bash", args: [scriptPath, ...scriptArgs] };
+        }
+
+        return { command: "cmd", args: ["/c", scriptPath, ...scriptArgs] };
+    }
+
+    private getExecutionTimeout(timeoutMs?: number): number {
+        if (!Number.isFinite(timeoutMs)) {
+            return 45_000;
+        }
+
+        const numericTimeout = Number(timeoutMs);
+
+        return Math.min(300_000, Math.max(1_000, Math.floor(numericTimeout)));
+    }
+
+    private appendProcessOutput(
+        currentValue: string,
+        chunk: string,
+        maxLength = 24_000
+    ): { value: string; truncated: boolean } {
+        if (currentValue.length >= maxLength) {
+            return { value: currentValue, truncated: true };
+        }
+
+        const allowedChunkLength = maxLength - currentValue.length;
+        const clippedChunk = chunk.slice(0, allowedChunkLength);
+        const nextValue = `${currentValue}${clippedChunk}`;
+
+        return {
+            value: nextValue,
+            truncated: clippedChunk.length < chunk.length
+        };
+    }
+
+    private async executeCommandLine(
+        command: string,
+        args: string[],
+        options: {
+            workingDirectory?: string;
+            timeoutMs?: number;
+        }
+    ): Promise<CommandExecutionResult> {
+        const trimmedCommand = command.trim();
+        const cwd = options.workingDirectory?.trim().length
+            ? path.resolve(options.workingDirectory)
+            : process.cwd();
+
+        if (!trimmedCommand.length) {
+            return {
+                success: false,
+                command: trimmedCommand,
+                args,
+                cwd,
+                exitCode: null,
+                timedOut: false,
+                stdout: "",
+                stderr: "",
+                truncatedStdout: false,
+                truncatedStderr: false,
+                error: "Command cannot be empty."
+            };
+        }
+
+        if (!fs.existsSync(cwd) || !fs.statSync(cwd).isDirectory()) {
+            return {
+                success: false,
+                command: trimmedCommand,
+                args,
+                cwd,
+                exitCode: null,
+                timedOut: false,
+                stdout: "",
+                stderr: "",
+                truncatedStdout: false,
+                truncatedStderr: false,
+                error: `Working directory does not exist or is not a directory: "${cwd}"`
+            };
+        }
+
+        const timeout = this.getExecutionTimeout(options.timeoutMs);
+
+        return new Promise<CommandExecutionResult>((resolve) => {
+            let stdout = "";
+            let stderr = "";
+            let truncatedStdout = false;
+            let truncatedStderr = false;
+            let timedOut = false;
+
+            const child = spawn(trimmedCommand, args, {
+                cwd,
+                shell: false,
+                windowsHide: true
+            });
+
+            const timeoutHandle = setTimeout(() => {
+                timedOut = true;
+                child.kill();
+            }, timeout);
+
+            child.stdout?.on("data", (chunk) => {
+                const appendResult = this.appendProcessOutput(stdout, String(chunk));
+                stdout = appendResult.value;
+                truncatedStdout = truncatedStdout || appendResult.truncated;
+            });
+
+            child.stderr?.on("data", (chunk) => {
+                const appendResult = this.appendProcessOutput(stderr, String(chunk));
+                stderr = appendResult.value;
+                truncatedStderr = truncatedStderr || appendResult.truncated;
+            });
+
+            child.on("error", (error) => {
+                clearTimeout(timeoutHandle);
+
+                resolve({
+                    success: false,
+                    command: trimmedCommand,
+                    args,
+                    cwd,
+                    exitCode: null,
+                    timedOut,
+                    stdout,
+                    stderr,
+                    truncatedStdout,
+                    truncatedStderr,
+                    error: error.message
+                });
+            });
+
+            child.on("close", (exitCode) => {
+                clearTimeout(timeoutHandle);
+
+                resolve({
+                    success: !timedOut && exitCode === 0,
+                    command: trimmedCommand,
+                    args,
+                    cwd,
+                    exitCode,
+                    timedOut,
+                    stdout,
+                    stderr,
+                    truncatedStdout,
+                    truncatedStderr,
+                    error: timedOut ? `Command timed out after ${timeout}ms.` : undefined
+                });
+            });
+        });
     }
     
     get api() {
