@@ -15,7 +15,11 @@ export class SkillDiskStore implements SchemaSkillStore {
     private rootDir: string;
 
     constructor(config: SkillDiskStoreConfig = {}) {
-        this.config = config;
+        this.config = {
+			...config,
+			dynamicSkillRemoval: config.dynamicSkillRemoval ?? false,
+            dynamicSkillRelocation: config.dynamicSkillRelocation ?? false
+		};
         this.rootDir = config.rootDir ?? path.join(process.cwd(), "skills");
     }
 
@@ -127,6 +131,111 @@ export class SkillDiskStore implements SchemaSkillStore {
         }
     }
 
+    createSkillFolder(folderName: string, folderLocation?: string): boolean {
+        try {
+            if (this.config.dynamicSkillCreation === false) {
+                return false;
+            }
+
+            const normalizedFolderName = this.normalizeLocation(folderName);
+
+            if (!normalizedFolderName.length) {
+                return false;
+            }
+
+            const normalizedBaseLocation = this.normalizeLocation(folderLocation);
+            const relativeFolderLocation = this.normalizeLocation(
+                normalizedBaseLocation.length > 0
+                    ? path.posix.join(normalizedBaseLocation, normalizedFolderName)
+                    : normalizedFolderName
+            );
+            const absoluteFolderLocation = this.resolveLocation(relativeFolderLocation);
+            const sessionRoot = this.getSessionRoot();
+            const relativeLocation = path.relative(sessionRoot, absoluteFolderLocation);
+
+            if (relativeLocation.startsWith("..") || path.isAbsolute(relativeLocation)) {
+                return false;
+            }
+
+            if (fs.existsSync(absoluteFolderLocation)) {
+                return false;
+            }
+
+            fs.mkdirSync(absoluteFolderLocation, { recursive: true });
+
+            return true;
+        }
+        catch {
+            return false;
+        }
+    }
+
+    removeSkillFolder(skillLocation: string): boolean {
+        try {
+            if (this.config.dynamicSkillRemoval === false) {
+                return false;
+            }
+
+            const normalizedSkillLocation = this.resolveSkillFolderLocation(skillLocation);
+
+            if (!normalizedSkillLocation.length) {
+                return false;
+            }
+
+            const absoluteSkillLocation = this.resolveLocation(normalizedSkillLocation);
+            const sessionRoot = this.getSessionRoot();
+            const relativeLocation = path.relative(sessionRoot, absoluteSkillLocation);
+
+            if (relativeLocation.startsWith("..") || path.isAbsolute(relativeLocation)) {
+                return false;
+            }
+
+            if (!fs.existsSync(absoluteSkillLocation) || !fs.statSync(absoluteSkillLocation).isDirectory()) {
+                return false;
+            }
+
+            fs.rmSync(absoluteSkillLocation, { recursive: true, force: false });
+
+            return true;
+        }
+        catch {
+            return false;
+        }
+    }
+
+    removeSkill(skillLocation: string): boolean {
+        try {
+            if (this.config.dynamicSkillRemoval === false) {
+                return false;
+            }
+
+            const normalizedSkillLocation = this.resolveSkillFolderLocation(skillLocation);
+
+            if (!normalizedSkillLocation.length) {
+                return false;
+            }
+
+            const absoluteSkillLocation = this.resolveLocation(normalizedSkillLocation);
+            const sessionRoot = this.getSessionRoot();
+            const relativeLocation = path.relative(sessionRoot, absoluteSkillLocation);
+
+            if (relativeLocation.startsWith("..") || path.isAbsolute(relativeLocation)) {
+                return false;
+            }
+
+            if (!fs.existsSync(absoluteSkillLocation) || !fs.statSync(absoluteSkillLocation).isDirectory()) {
+                return false;
+            }
+
+            fs.rmSync(absoluteSkillLocation, { recursive: true, force: false });
+
+            return true;
+        }
+        catch {
+            return false;
+        }
+    }
+
     reloacateSkill(fromLocation: string, toLocation: string): boolean {
         try {
             const normalizedFromLocation = this.normalizeLocation(fromLocation);
@@ -192,6 +301,24 @@ export class SkillDiskStore implements SchemaSkillStore {
         }
 
         return path.join(this.resolveLocation(normalizedLocation), SKILL_FILE_NAME);
+    }
+
+    private resolveSkillFolderLocation(fromLocation?: string): string {
+        const normalizedLocation = this.normalizeLocation(fromLocation);
+
+        if (!normalizedLocation || normalizedLocation === ".") {
+            return "";
+        }
+
+        if (
+            normalizedLocation.toLowerCase() === SKILL_FILE_NAME.toLowerCase() ||
+            normalizedLocation.toLowerCase().endsWith(`/${SKILL_FILE_NAME.toLowerCase()}`)
+        ) {
+            const parentLocation = this.normalizeLocation(path.posix.dirname(normalizedLocation));
+            return parentLocation === "." ? "" : parentLocation;
+        }
+
+        return normalizedLocation;
     }
 
     private toScopeRelativeLocation(absolutePath: string): string {

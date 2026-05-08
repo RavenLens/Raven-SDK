@@ -22,6 +22,8 @@ interface MongoSkillCollection {
 		filter: Record<string, unknown>,
 		update: Record<string, unknown>
 	): Promise<unknown>;
+	deleteMany?(query: Record<string, unknown>): Promise<unknown>;
+	deleteOne?(filter: Record<string, unknown>): Promise<unknown>;
 }
 
 type MongoDBSkillStoreConfig = SchemaSkillStore["config"] & {
@@ -38,7 +40,11 @@ export class MongoDBSkillStore implements SchemaSkillStore {
 	config: MongoDBSkillStoreConfig;
 
 	constructor(config: MongoDBSkillStoreConfig) {
-		this.config = config;
+		this.config = {
+			...config,
+			dynamicSkillRemoval: config.dynamicSkillRemoval ?? false,
+			dynamicSkillRelocation: config.dynamicSkillRelocation ?? false
+		};
 	}
 
 	async discoverSkillFolder(fromLocation?: string): Promise<(SkillFolderEntry | SkillFileEntry)[]> {
@@ -116,6 +122,125 @@ export class MongoDBSkillStore implements SchemaSkillStore {
 			};
 
 			await this.config.collection.insertOne(document);
+
+			return true;
+		}
+		catch {
+			return false;
+		}
+	}
+
+	async createSkillFolder(folderName: string, folderLocation?: string): Promise<boolean> {
+		try {
+			if (this.config.dynamicSkillCreation === false) {
+				return false;
+			}
+
+			const normalizedFolderName = this.normalizeLocation(folderName);
+
+			if (!normalizedFolderName.length) {
+				return false;
+			}
+
+			const parentLocation = this.resolveScopedLocation(this.normalizeLocation(folderLocation));
+			const fullLocation = parentLocation.length > 0 ? `${parentLocation}/${normalizedFolderName}` : normalizedFolderName;
+			const existing = await this.config.collection.findOne({ location: fullLocation });
+
+			if (existing) {
+				return false;
+			}
+
+			const document: MongoSkillDocument = {
+				kind: "folder",
+				location: fullLocation,
+				type: "skill-ward",
+				folderName: this.lastPathPart(normalizedFolderName),
+				parentLocation: parentLocation.length > 0 ? parentLocation : ""
+			};
+
+			await this.config.collection.insertOne(document);
+
+			return true;
+		}
+		catch {
+			return false;
+		}
+	}
+
+	async removeSkillFolder(skillLocation: string): Promise<boolean> {
+		try {
+			if (this.config.dynamicSkillRemoval === false) {
+				return false;
+			}
+
+			const normalizedLocation = this.resolveSkillFolderLocation(skillLocation);
+
+			if (!normalizedLocation.length) {
+				return false;
+			}
+
+			const scopedLocation = this.resolveScopedLocation(normalizedLocation);
+			const locationPattern = new RegExp(`^${this.escapeRegex(scopedLocation)}(?:/|$)`, "i");
+
+			if (typeof this.config.collection.deleteMany === "function") {
+				await this.config.collection.deleteMany({ location: locationPattern });
+				return true;
+			}
+
+			if (typeof this.config.collection.deleteOne !== "function") {
+				return false;
+			}
+
+			const documentsToDelete = await this.resolveFind(this.config.collection.find({ location: locationPattern }));
+
+			if (!documentsToDelete.length) {
+				return false;
+			}
+
+			for (const document of documentsToDelete) {
+				await this.config.collection.deleteOne({ location: document.location, kind: document.kind });
+			}
+
+			return true;
+		}
+		catch {
+			return false;
+		}
+	}
+
+	async removeSkill(skillLocation: string): Promise<boolean> {
+		try {
+			if (this.config.dynamicSkillRemoval === false) {
+				return false;
+			}
+
+			const normalizedLocation = this.resolveSkillFolderLocation(skillLocation);
+
+			if (!normalizedLocation.length) {
+				return false;
+			}
+
+			const scopedLocation = this.resolveScopedLocation(normalizedLocation);
+			const locationPattern = new RegExp(`^${this.escapeRegex(scopedLocation)}(?:/|$)`, "i");
+
+			if (typeof this.config.collection.deleteMany === "function") {
+				await this.config.collection.deleteMany({ location: locationPattern });
+				return true;
+			}
+
+			if (typeof this.config.collection.deleteOne !== "function") {
+				return false;
+			}
+
+			const documentsToDelete = await this.resolveFind(this.config.collection.find({ location: locationPattern }));
+
+			if (!documentsToDelete.length) {
+				return false;
+			}
+
+			for (const document of documentsToDelete) {
+				await this.config.collection.deleteOne({ location: document.location, kind: document.kind });
+			}
 
 			return true;
 		}
@@ -310,6 +435,24 @@ export class MongoDBSkillStore implements SchemaSkillStore {
 		}
 
 		return this.resolveScopedLocation(`${normalizedLocation}/${SKILL_FILE_NAME}`);
+	}
+
+	private resolveSkillFolderLocation(fromLocation?: string): string {
+		const normalizedLocation = this.normalizeLocation(fromLocation);
+
+		if (!normalizedLocation || normalizedLocation === ".") {
+			return "";
+		}
+
+		if (
+			normalizedLocation.toLowerCase() === SKILL_FILE_NAME.toLowerCase() ||
+			normalizedLocation.toLowerCase().endsWith(`/${SKILL_FILE_NAME.toLowerCase()}`)
+		) {
+			const parentLocation = this.parentPath(normalizedLocation);
+			return parentLocation === "." ? "" : parentLocation;
+		}
+
+		return normalizedLocation;
 	}
 
 	private resolveScopedLocation(fromLocation?: string): string {

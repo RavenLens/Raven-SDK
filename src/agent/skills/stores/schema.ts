@@ -1,3 +1,5 @@
+import { SkillSharedConfig } from "../skills";
+
 export interface SkillFileEntry {
     fileName: string;
     type: "skill" | "script" | "reference" | "documentation" | "assets";
@@ -26,18 +28,7 @@ export interface SkillFolderEntry {
 
 // Include schema(s) for skill storages
 export interface SchemaSkillStore {
-    config: {
-        /** 
-         * Optional: Session is required to store the skills bound e.g: to user account or specific user session
-         * Some stores requires it some other don't
-        */
-        session?: string;
-        /**
-         * Derives default value from the of base [`Skills`](../skills.ts) class
-         * Manual configuration will be overrided by builtin logic
-        */
-        dynamicSkillCreation?: boolean;
-    };
+    config: SkillSharedConfig;
     
     /** 
      * Use it to discrover the skill wards/subwards, skills
@@ -67,6 +58,15 @@ export interface SchemaSkillStore {
         inLocation?: string | undefined | null,
     ): boolean | Promise<boolean>;
     /**
+     * Create skill folder what is essentially the skill wards
+    */
+    createSkillFolder(folderName: string, folderLocation?: string): boolean | Promise<boolean>;
+    /**
+     * Remove specific skill folder what is ward
+     * Remove skill wards with the skills are in this ward -> to avoid this behaviour relocate the skills first with the `reloacateSkill` method
+    */
+    removeSkillFolder(folderLocation: string): boolean | Promise<boolean>;
+    /**
      * Use to rellocate particular skills, wards and/or subwards
      * @param fromLocation - folder where is the skill / ward with skills and/or subwards
      * @param toLocation - folder where the `fromLocation` has to be relocated
@@ -75,4 +75,9 @@ export interface SchemaSkillStore {
         fromLocation: string,
         toLocation: string
     ): boolean | Promise<boolean>
+    /**
+     * Remove specific skill
+     * Skill location is the location of folder named with skill name
+    */
+    removeSkill(skillLocation: string): boolean | Promise<boolean>;
 }

@@ -5,6 +5,7 @@ import { OpenAI } from "../models/openai";
 import { SchemaMemoryStore } from "./memory/schema";
 import { SchemaSkillStore } from "./skills/stores/schema";
 import { AgentMessagesGraphState, MessagesVariations } from "./state";
+import { Skills as SkillsInterface } from "./skills/skills";
 import { MCPTool } from "./tools/mcpTools";
 import { Tool } from "./tools/tools";
 
@@ -18,9 +19,9 @@ interface ReActAgentConfig<Skills extends SchemaSkillStore, Memory extends Schem
     */
     skills?: Skills;
     /**
-     * It's the agent knowledge he developed for specific user session or for organization
+     * It's the agent memory he developed for specific user session or for organization
      */
-    knowledge?: Memory;
+    memory?: Memory;
     tools: Tool<any, any>[];
     /** Maximum amount of internal self-recalls without tool usage. Defaults to 3 when omitted. */
     maximumReasoningRecalls?: number;
@@ -90,7 +91,7 @@ type ReActAgentStreamListener = (event: ReActAgentStreamChunk) => void;
 
 const RECALL_MAIN_NODE_PREFIX = "[[RAVEN_RECALL_MAIN_NODE]]";
 const DEFAULT_MAX_REASONING_RECALLS = 3;
-const REACT_SYSTEM_PROMPT = [
+let REACT_SYSTEM_PROMPT = [
     "You are RavenADK ReAct agent.",
     "Follow the ReAct loop strictly:",
     "1. Reason about the task and what information is missing.",
@@ -130,6 +131,7 @@ export class ReActAgent<Skills extends SchemaSkillStore, Memory extends SchemaMe
     private EventsListeners: Record<string, (...args: any[]) => void | Promise<void>> = {};
     private StreamListeners: Set<ReActAgentStreamListener> = new Set();
     agentConfig: ReActAgentConfig<Skills, Memory>;
+    agentSkillsInterface: SkillsInterface<Skills> | undefined = undefined;
 
     constructor(config: ReActAgentConfig<Skills, Memory>) {
         this.agentConfig = {
@@ -137,6 +139,24 @@ export class ReActAgent<Skills extends SchemaSkillStore, Memory extends SchemaMe
             // Agent generate conclusion by default
             withConclusion: config.withConclusion ?? true
         };
+        this.agentSkillsInterface = config.skills ? new SkillsInterface({
+            ...config.skills.config,
+            skillStorage: config.skills
+        }) : undefined;
+
+        // Add skills exploration feature to standalone agent
+        if (this.agentSkillsInterface) {
+            // Skills explore. tools prep
+            this.agentConfig.tools = [
+                ...this.agentConfig.tools,
+                ...(this.agentSkillsInterface ? this.agentSkillsInterface.createExploreSkillsAgentTools() : [])
+            ];
+
+            // Add Skills exploration system prompt
+            REACT_SYSTEM_PROMPT += `\n\nExplore your skills and use them according to this specification:\n${SkillsInterface.exploreSkillsPrompt}`;
+        }
+
+        // Preparation
         this.ensureWrappedSystemPrompt();
         this.synchronizeModelConfig();
 
@@ -249,6 +269,16 @@ export class ReActAgent<Skills extends SchemaSkillStore, Memory extends SchemaMe
                     };
                 }
 
+                // TODO: Remember new things to Memory when necessary
+
+                // TODO: Make new skills when necessary
+                // Skills are make at the end of action
+                if (this.agentConfig.skills?.config.dynamicSkillCreation) {
+                    const managementSkillsTools = this.agentSkillsInterface?.createManageSkillAgentTools();
+
+                    // TODO: Make Agent to analyse chat history and make skills accroding to conditions -> agent has to analyse skills and create them as needed
+                }
+                
                 // Check is the output the ai assistant
                 const hasFinalOutput = modelInvoke.answer.some(
                     answerMsg => answerMsg.type === "ai" && !!answerMsg.content?.trim()
