@@ -72,6 +72,7 @@ This is how to create ReAct agent
 ```typescript
     import { ReActAgent } from "raven-adk/agents";
     import { tool } from "raven-adk/tools";
+    import { MongoDBSkillStore, SkillDiskStore } from "raven-adk/skills/store";
 
     const reactAgent = new ReActAgent({
         systemPrompt: `Your system prompt`,
@@ -106,8 +107,30 @@ This is how to create ReAct agent
                 }
             )
         ],
-        skills: // optional skills for agent; TODO: Setup agent skills; 
-        knowledge: , // optional agent knowledge TODO: Setup agent knowledge
+        // Optional skills for agent — MongoDB-backed example
+        // The MongoDBSkillStore expects a `collection` object that implements the
+        // minimal Collection-like API used by the store (methods like `find`,
+        // `findOne`, `insertOne`, `updateOne` and optional `deleteMany`/`deleteOne`).
+        // Use the official `mongodb` driver and pass the `Collection` instance.
+        // Example (inside an async context):
+        //
+        // import { MongoClient } from 'mongodb';
+        // const client = new MongoClient(process.env.MONGODB_URI ?? 'mongodb://localhost:27017');
+        // await client.connect();
+        // const db = client.db('raven-adk');
+        // const skillsCollection = db.collection('skills');
+        //
+        // Then pass `skillsCollection` into the store configuration:
+        skills: new MongoDBSkillStore({
+            collection: skillsCollection, // a MongoDB Collection instance
+            root: 'skills', // optional prefix used inside the store documents
+            dynamicSkillCreation: true,
+            dynamicSkillRemoval: true,
+            dynamicSkillRelocation: true,
+            session: 'your-session-id' // scope skills per user/session if desired
+        }),
+        // Optional agent memory -> use to remember and read the information (TODO: setup)
+        memory: ,
     });
 
     // Listend agent events

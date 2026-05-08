@@ -27,6 +27,7 @@
   "dependencies": {
     "@anthropic-ai/sdk": "^0.94.0",
     "@modelcontextprotocol/sdk": "^1.29.0",
+    "chromadb": "^3.4.3",
     "openai": "^6.36.0",
     "runpod-sdk": "^1.1.2",
     "vitest": "^4.1.5",

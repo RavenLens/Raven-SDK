@@ -2,7 +2,8 @@ import { Graph, GraphMarkers } from "../graph";
 import { Anthropic } from "../models/anthropic";
 import { LLMAnswer } from "../models/mutual";
 import { OpenAI } from "../models/openai";
-import { SchemaMemoryStore } from "./memory/schema";
+import { SchemaMemoryStore } from "./memory/stores/schema";
+import { Memory as MemoryInterface } from "./memory/memory";
 import { SchemaSkillStore } from "./skills/stores/schema";
 import { AgentMessagesGraphState, MessagesVariations } from "./state";
 import { Skills as SkillsInterface } from "./skills/skills";
@@ -132,6 +133,7 @@ export class ReActAgent<Skills extends SchemaSkillStore, Memory extends SchemaMe
     private StreamListeners: Set<ReActAgentStreamListener> = new Set();
     agentConfig: ReActAgentConfig<Skills, Memory>;
     agentSkillsInterface: SkillsInterface<Skills> | undefined = undefined;
+    agentMemoryInterface: MemoryInterface<Memory> | undefined = undefined;
     /** It's overall amount of used tokens by the ReAct agent */
     usedTokens: LLMAnswer["tokens"];
 
@@ -145,6 +147,7 @@ export class ReActAgent<Skills extends SchemaSkillStore, Memory extends SchemaMe
             ...config.skills.config,
             skillStorage: config.skills
         }) : undefined;
+        this.agentMemoryInterface = config.memory ? new MemoryInterface(config.memory) : undefined;
         this.usedTokens = {
             input: 0,
             output: 0,
@@ -171,6 +174,17 @@ export class ReActAgent<Skills extends SchemaSkillStore, Memory extends SchemaMe
             
             // Add skills management system prompt
             REACT_SYSTEM_PROMPT += `\n\nCreate and manage skills as needed according to this specification:\n${SkillsInterface.createSkillsPrompt}`;
+        }
+
+        if (this.agentMemoryInterface) {
+            const memoryTools = this.agentMemoryInterface.createMemoryTools();
+
+            this.agentConfig.tools = [
+                ...this.agentConfig.tools,
+                ...memoryTools
+            ];
+
+            REACT_SYSTEM_PROMPT += `\n\nMemory and recall system:\n${MemoryInterface.memorySystemPrompt}`;
         }
 
         // Preparation
