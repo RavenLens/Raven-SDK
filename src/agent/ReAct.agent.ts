@@ -9,6 +9,7 @@ import { AgentMessagesGraphState, MessagesVariations } from "./state";
 import { Skills as SkillsInterface } from "./skills/skills";
 import { MCPTool } from "./tools/mcpTools";
 import { Tool } from "./tools/tools";
+import { HITLConfigSchema } from "./tools/hitl/hitlToolSchema";
 
 interface ReActAgentConfig<Skills extends SchemaSkillStore, Memory extends SchemaMemoryStore> {
     model: OpenAI | Anthropic;
@@ -24,6 +25,8 @@ interface ReActAgentConfig<Skills extends SchemaSkillStore, Memory extends Schem
      */
     memory?: Memory;
     tools: Tool<any, any>[];
+    /** specify this schema to use the Human In The Loop */
+    hitl?: HITLConfigSchema;
     /** Maximum amount of internal self-recalls without tool usage. Defaults to 3 when omitted. */
     maximumReasoningRecalls?: number;
     /** As default is `true` boolean */
@@ -300,8 +303,6 @@ export class ReActAgent<Skills extends SchemaSkillStore, Memory extends SchemaMe
                         }
                     };
                 }
-
-                // TODO: Remember new things to Memory when necessary
 
                 // Check is the output the ai assistant
                 const hasFinalOutput = modelInvoke.answer.some(
