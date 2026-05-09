@@ -1,74 +1,12 @@
-# Raven ADK
-Open source Agent Developement Kit ***made to support wild AI-Agents Developement initiatives***. Gives native support for JavaScript environments, ***strongly base on events population*** - each action of library can be captured as the event what simplifies creating of breathtaking UX like: user see that agent is now thinking without complicated logic on side of developement. Open from definition; Anyone can become contributor
+# Memory
+Memory in RavenADK agents provide you way to remember data from interactions with user and get them recalled in next iterations what makes vivid user interactions. Such informations can be manipulated via Memory: 
+    - user name
+    - user preferrences
+    - user given task
+    - user conversation style schema - it can be 
+Finally you've full agency to decide what agent has to remember, what should so you decide the agent behaviour
 
-## GraphBased
-Use graph with this style to make your own workflow
-
-```typescript
-import { Graph, GraphMarkers } from "raven-adk";
-
-const graphState = { invokeTimes: 0 };
-const graph = new Graph(graphState);
-
-// Listen events execution
-graph.onEvent("node_start", (nodeId, state) => {
-    // When node execution has begun
-});
-
-graph.onEvent("node_end", (nodeId, state) => {
-    // When node was finished (after return)
-});
-
-graph.onEvent("state_change", (nodeId, stateBefore, stateAfter) => {
-    // When state was changed before node execution
-});
-
-// Graph Src logic
-graph
-    .addNode("node_1", (graphState) => {
-        /// your logic
-        if (invokeTimes === 1) {
-            return {}; // Empty object when no state nor node was updated -> then will be called node introduced by the edge
-        }
-
-        return {
-            stateUpdate: {
-                ...graphState,
-                invokeTimes: graphState.invokeTimes + 1
-            },
-            // Overrides node calling logic -> can call different node with this
-            callNode: "node_1"
-        }
-    })
-    .addNode("node_2", async (graphState) => {
-        /// your logic
-        return {
-            stateUpdate: {
-                ...graphState,
-                invokeTimes: graphState.invokeTimes + 1
-            }
-        }
-    })
-    .addEdge(GraphMarkers.START, "node_1")
-    .addEdge("node_1", "node_2")
-    .addEdge("node_2", GraphMarkers.END);
-
-// Start graph execution
-await graph.start();
-
-// Returns your updated state via all nodes execution
-const updatedState = graph.getState(); // OR: graph.graphState;
-```
-
-> [Check more about graph](./Graph.md)
-
-## Agent
-### ReAct Agent
-ReAct Agent is the standalone agent of RavenADK -> it's about to Reason atop of given task and act in his behalf to accomplish given task The best as possible
-
-> **ReAct** agent will: Reason, Make Actions, Use tools, Produce Thoughts and at the end produce output
-
-This is how to create ReAct agent
+## Configuring memory for ReAct Agent
 ```typescript
     import { ReActAgent } from "raven-adk/agents";
     import { tool } from "raven-adk/tools";
@@ -145,30 +83,26 @@ This is how to create ReAct agent
         }),
     });
 
-    // Listend agent events
-    reactAgent.onEvent("tool_invoked", (toolName, toolParams) => {
-
-    });
-
-    /// ... Register more events from available set as needed
-
-    // Invoke agent (after when agent events were registered)
-    const agentSync = await reactAgent.invoke();
-
-    // Get agent output
-    const agentResponse = agentSync.messages.at(-1).content;
+    // ... Rest of agent logic
 ```
 
-#### Skills
-Skills of RavenADK are compliant with open [skills standard](https://agentskills.io/home) what is use by e.g: Claude Code, MS Copilot and likelly more
-[Read more about RavenADK skills](./Skills.md)
+## Controlling what agent can remember
+Pass tp agent config object `memory.hasToRememeber` output with output value will be string. This has to be list with specification for agent according with what has it to rememeber
 
-## Contribution
-If you would like to become official contributor contact with one of bellow channels
+## Memory model
+This subsection describe how the agent memory work.
 
-* [Discord](https://discord.gg/eFfVjDj7Xd)
-* [email](mailto:official@ravenlens.io)
-* [LinkedIn](https://www.linkedin.com/in/micha%C5%82-szczepa%C5%84ski-0476192a8/)
+> RavenADK memory is graph of knowledge with mutual relations assigned as edges where nodes are the wards of knowledge e.g: user prefferences like birthday, user friends, user used programs and so on. Each information is connected to another communication with weight. RavenADK memory system base too on the weight system where the more relevant informations gets higher weight and less vibrant lower weight
 
-### Your ideas are going to be appreciated
-You can openly tell your your idea in the **issues** or in the one of above specified channels
+#### Memory details
+- Memory is fetched with these techniques:
+    - semantically (base on semantic search) or according to relevance
+    - by exploration like the tower - agent can explore the knowledge by going through it like you go from one city stree to another
+- You can disable memory if you don't want to use it
+
+
+### Built-In Stores
+- Local disk store: [`SkillDiskStore`](./src/agent/skills/stores/diskStore.ts)
+- MongoDB store: [`MongoDBSkillStore`](./src/agent/skills/stores/mongodbStore.ts)
+
+You can also build custom stores by implementing [`SchemaSkillStore`](./src/agent/skills/stores/schema.ts).

@@ -1,5 +1,11 @@
 export interface SchemaMemoryConfig {
     /** 
+     * List with informations agent has to rememeber e.g:
+     *  1. User name
+     *  2. User subjects of interest: e.g: Ferrari Cars, Apple devices
+    */
+    hasToRemember: string;
+    /** 
      * Optional: Session is required to store the memory bound e.g: to user account or specific user session
      * Some stores requires it some other don't
     */
@@ -35,7 +41,7 @@ export interface MemoryRecord {
     }[];
 }
 
-export type MemoryFetchResult = MemoryRecord | undefined;
+export type MemoryFetchResult = MemoryRecord | MemoryRecord[] | undefined;
 
 export interface SchemaMemoryStore {
     config: SchemaMemoryConfig;

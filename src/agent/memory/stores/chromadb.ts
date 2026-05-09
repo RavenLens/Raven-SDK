@@ -99,23 +99,29 @@ export class MemoryChromaDBStore implements SchemaMemoryStore {
         }
 
         const searchText = words.join(" ");
+        const sessionWhere = this.resolveSessionWhere();
 
         if (typeof collection.query === "function") {
             const queryResult = await collection.query({
                 queryTexts: [searchText],
-                nResults: 1,
-                include: ["documents", "metadatas"]
+                nResults: this.resolveSemanticResultLimit(words),
+                include: ["documents", "metadatas"],
+                ...(sessionWhere ? { where: sessionWhere } : {})
             });
 
-            const id = queryResult.ids?.[0]?.[0];
-            const metadata = queryResult.metadatas?.[0]?.[0] ?? null;
-            const document = queryResult.documents?.[0]?.[0] ?? null;
+            const ids = queryResult.ids?.[0] ?? [];
+            const metadatas = queryResult.metadatas?.[0] ?? [];
+            const documents = queryResult.documents?.[0] ?? [];
 
-            if (!id) {
+            if (ids.length === 0) {
                 return undefined;
             }
 
-            return this.toMemoryRecord(id, metadata, document);
+            return ids.map((id, index) => this.toMemoryRecord(
+                id,
+                metadatas[index] ?? null,
+                documents[index] ?? null
+            ));
         }
 
         if (typeof collection.get !== "function") {
@@ -124,7 +130,8 @@ export class MemoryChromaDBStore implements SchemaMemoryStore {
 
         const fallbackResults = await collection.get({
             include: ["documents", "metadatas"],
-            limit: 100
+            limit: 100,
+            ...(sessionWhere ? { where: sessionWhere } : {})
         });
 
         return this.findByKeywordScore(fallbackResults, words);
@@ -135,9 +142,12 @@ export class MemoryChromaDBStore implements SchemaMemoryStore {
             return undefined;
         }
 
+        const sessionWhere = this.resolveSessionWhere();
+
         const results = await collection.get({
             include: ["documents", "metadatas"],
-            limit: 100
+            limit: 100,
+            ...(sessionWhere ? { where: sessionWhere } : {})
         });
 
         const ids = results.ids ?? [];
@@ -176,38 +186,41 @@ export class MemoryChromaDBStore implements SchemaMemoryStore {
         }
 
         const loweredWords = words.map(word => word.toLowerCase());
-        let bestIndex = -1;
-        let bestScore = Number.NEGATIVE_INFINITY;
+        const scoredResults = ids
+            .map((id, index) => {
+                const metadata = results.metadatas?.[index] ?? null;
+                const document = results.documents?.[index] ?? "";
+                const searchableBlob = [
+                    document,
+                    String(metadata?.title ?? ""),
+                    String(metadata?.content ?? ""),
+                    String(metadata?.keywords ?? ""),
+                    String(metadata?.relatedMemoryIds ?? ""),
+                    String(metadata?.relationStrengths ?? "")
+                ].join("\n").toLowerCase();
 
-        for (let index = 0; index < ids.length; index += 1) {
-            const metadata = results.metadatas?.[index] ?? null;
-            const document = results.documents?.[index] ?? "";
-            const searchableBlob = [
-                document,
-                String(metadata?.title ?? ""),
-                String(metadata?.content ?? ""),
-                String(metadata?.keywords ?? ""),
-                String(metadata?.relatedMemoryIds ?? ""),
-                String(metadata?.relationStrengths ?? "")
-            ].join("\n").toLowerCase();
+                const score = loweredWords.reduce((total, word) => total + (searchableBlob.includes(word) ? 1 : 0), 0);
 
-            const score = loweredWords.reduce((total, word) => total + (searchableBlob.includes(word) ? 1 : 0), 0);
+                return {
+                    id,
+                    metadata,
+                    document,
+                    score,
+                    index
+                };
+            })
+            .filter((entry) => entry.id.trim().length > 0)
+            .sort((left, right) => right.score - left.score || left.index - right.index);
 
-            if (score > bestScore) {
-                bestScore = score;
-                bestIndex = index;
-            }
-        }
-
-        if (bestIndex < 0) {
+        if (scoredResults.length === 0) {
             return undefined;
         }
 
-        return this.toMemoryRecord(
-            ids[bestIndex],
-            results.metadatas?.[bestIndex] ?? null,
-            results.documents?.[bestIndex] ?? null
-        );
+        return scoredResults.map((entry) => this.toMemoryRecord(
+            entry.id,
+            entry.metadata,
+            entry.document
+        ));
     }
 
     private toMemoryRecord(id: string, metadata: ChromaMetadata | null, document: string | null): MemoryRecord {
@@ -245,7 +258,7 @@ export class MemoryChromaDBStore implements SchemaMemoryStore {
             subMemoryIds: JSON.stringify(normalizedRelations),
             relationCount: normalizedRelations.length,
             maxRelationStrength,
-            session: this.config.session ?? ""
+            session: this.resolveSession() ?? ""
         };
     }
 
@@ -363,6 +376,32 @@ export class MemoryChromaDBStore implements SchemaMemoryStore {
         return fallback;
     }
 
+    private resolveSession(): string | undefined {
+        const session = this.config.session?.trim();
+
+        if (!session) {
+            return undefined;
+        }
+
+        return session;
+    }
+
+    private resolveSessionWhere(): Record<string, unknown> | undefined {
+        const session = this.resolveSession();
+
+        if (!session) {
+            return undefined;
+        }
+
+        return {
+            session
+        };
+    }
+
+    private resolveSemanticResultLimit(words: string[]): number {
+        return Math.min(Math.max(words.length * 2, 5), 10);
+    }
+
     private async getCollection(): Promise<ChromaCollection> {
         if (!this.collectionPromise) {
             this.collectionPromise = this.createCollection();
@@ -406,7 +445,7 @@ export class MemoryChromaDBStore implements SchemaMemoryStore {
     }
 
     private resolveCollectionName(): string {
-        const session = (this.config.session ?? "default")
+        const session = (this.resolveSession() ?? "default")
             .trim()
             .toLowerCase()
             .replace(/[^a-z0-9_-]/g, "-")

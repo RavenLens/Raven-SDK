@@ -2,6 +2,7 @@ import z from "zod";
 import { tool, Tool } from "../tools/tools";
 import { MemoryFetch, MemoryRecord } from "./stores/schema";
 import { SchemaMemoryStore } from "./stores/schema";
+import { randomUUID } from "node:crypto";
 
 export class Memory<MemoryStore extends SchemaMemoryStore> {
     static memorySystemPrompt: string = [
@@ -18,7 +19,7 @@ export class Memory<MemoryStore extends SchemaMemoryStore> {
         "9. Do not save transient chat noise, repeated tool output, secrets, or speculative guesses.",
         "10. When saving related facts, attach related memory ids and strength values in the range 0 to 1 when known.",
         "11. Prefer short, normalized titles and clear content that can be reused in later turns.",
-        "12. If you are unsure whether a fact is worth remembering, fetch first and save only if it is genuinely new and durable."
+        "12. If you are unsure whether a fact is worth remembering, fetch first and save only if it is genuinely new and durable.",
     ].join("\n");
     store: MemoryStore;
 
@@ -28,22 +29,21 @@ export class Memory<MemoryStore extends SchemaMemoryStore> {
 
     createMemoryTools(): Tool<any, any>[] {
         const fetchMemoryArguments = z.object({
-            mode: z.enum(["semantic", "explore"]).default("semantic"),
-            words: z.union([z.string(), z.array(z.string())]).optional(),
-            reason: z.string().optional()
+            mode: z.enum(["semantic", "explore"]).default("semantic").describe("Says whether to fetch records by the `semantic` or `explore` all records"),
+            words: z.union([z.string(), z.array(z.string())]).optional().describe("List with semantic words similarity for what we search results. Required to pass for `fetch_memory` where `mode` = 'semantic'"),
+            reason: z.string().optional().describe("Reason why you use the `fetch_memory` operation")
         }).passthrough();
 
         const saveMemoryArguments = z.object({
             record: z.object({
-                id: z.string().min(1),
-                title: z.string().min(1),
-                content: z.string().min(1),
-                keywords: z.array(z.string()).default([]),
+                title: z.string().describe("tilte of memory record"),
+                content: z.string().describe("content of memory record. E.g: Comprahensive description"),
+                keywords: z.array(z.string()).default([]).describe("List with keywords describe memory record"),
                 subMemoryIds: z.array(z.object({
-                    id: z.string().min(1),
-                    strength: z.number().min(0).max(1).optional()
-                })).default([])
-            }),
+                    id: z.string().describe("Real id of related memory subject. Use the `fetch_memory` tool to fetch the ids of available tools"),
+                    strength: z.number().optional().describe("Floating point number from range 0.00 - 1.00 what describes the strength of related memory to this memory record (memory record has this `title`, `keywords` and `content`)")
+                })).default([]).describe("List with unique ids of related memory subjects")
+            } satisfies Record<keyof Omit<MemoryRecord, "id">, z.ZodType>),
             // Optional extra hint used to search for duplicates before saving.
             words: z.union([z.string(), z.array(z.string())]).optional()
         }).passthrough();
@@ -73,7 +73,11 @@ export class Memory<MemoryStore extends SchemaMemoryStore> {
             ),
             tool(
                 async (args) => {
-                    const record = this.normalizeMemoryRecord(args.record);
+                    const uinqueId = randomUUID();
+                    const record = this.normalizeMemoryRecord({
+                        ...args.record,
+                        id: uinqueId
+                    });
 
                     if (!record) {
                         return this.serializeToolResult({
@@ -173,11 +177,19 @@ export class Memory<MemoryStore extends SchemaMemoryStore> {
             return undefined;
         }
 
-        if (this.isDuplicateMemory(existing, record)) {
-            return existing;
+        const duplicate = this.findDuplicateMemory(existing, record);
+
+        if (duplicate) {
+            return duplicate;
         }
 
         return undefined;
+    }
+
+    private findDuplicateMemory(existing: MemoryRecord | MemoryRecord[], incoming: MemoryRecord): MemoryRecord | undefined {
+        const candidates = Array.isArray(existing) ? existing : [existing];
+
+        return candidates.find((candidate) => this.isDuplicateMemory(candidate, incoming));
     }
 
     private buildDuplicateSearchWords(record: MemoryRecord, words?: string | string[]): string[] {
@@ -214,8 +226,8 @@ export class Memory<MemoryStore extends SchemaMemoryStore> {
         }
 
         if (existingContent === incomingContent) {
-            const existingKeywords = new Set(existing.keywords.map((keyword) => this.normalizeText(keyword)));
-            const incomingKeywords = new Set(incoming.keywords.map((keyword) => this.normalizeText(keyword)));
+            const existingKeywords = new Set(existing.keywords.map((keyword: string) => this.normalizeText(keyword)));
+            const incomingKeywords = new Set(incoming.keywords.map((keyword: string) => this.normalizeText(keyword)));
 
             const keywordOverlap = [...incomingKeywords].filter((keyword) => existingKeywords.has(keyword)).length;
             const largestKeywordSet = Math.max(existingKeywords.size, incomingKeywords.size, 1);
@@ -268,5 +280,9 @@ export class Memory<MemoryStore extends SchemaMemoryStore> {
         catch {
             return String(value);
         }
+    }
+
+    get api() {
+        return this.store;
     }
 }

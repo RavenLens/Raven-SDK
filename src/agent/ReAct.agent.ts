@@ -167,13 +167,13 @@ export class ReActAgent<Skills extends SchemaSkillStore, Memory extends SchemaMe
             ];
 
             // Add Skills exploration system prompt
-            REACT_SYSTEM_PROMPT += `\n\nExplore your skills and use them according to this specification:\n${SkillsInterface.exploreSkillsPrompt}`;
+            REACT_SYSTEM_PROMPT += `\n\n## Explore your skills and use them according to this specification:\n${SkillsInterface.exploreSkillsPrompt}`;
 
             // Add skills script execution system prompt
-            REACT_SYSTEM_PROMPT += `\n\nExecute skill scripts and CLI commands according to this specification:\n${SkillsInterface.executeSkillScriptsPrompt}`;
+            REACT_SYSTEM_PROMPT += `\n\n## Execute skill scripts and CLI commands according to this specification:\n${SkillsInterface.executeSkillScriptsPrompt}`;
             
             // Add skills management system prompt
-            REACT_SYSTEM_PROMPT += `\n\nCreate and manage skills as needed according to this specification:\n${SkillsInterface.createSkillsPrompt}`;
+            REACT_SYSTEM_PROMPT += `\n\n## Create and manage skills as needed according to this specification:\n${SkillsInterface.createSkillsPrompt}`;
         }
 
         if (this.agentMemoryInterface) {
@@ -184,7 +184,7 @@ export class ReActAgent<Skills extends SchemaSkillStore, Memory extends SchemaMe
                 ...memoryTools
             ];
 
-            REACT_SYSTEM_PROMPT += `\n\nMemory and recall system:\n${MemoryInterface.memorySystemPrompt}`;
+            REACT_SYSTEM_PROMPT += `\n\n\n\n## Memory and recall system:\n${MemoryInterface.memorySystemPrompt}\n\nYou've to remember following informations always when has occured in conversation transcript and were't already remembered:\n${this.agentMemoryInterface.store.config.hasToRemember}`;
         }
 
         // Preparation
@@ -290,7 +290,7 @@ export class ReActAgent<Skills extends SchemaSkillStore, Memory extends SchemaMe
                         };
                     }
 
-                    await this.appendConclusionMessage();
+                    await this.concludeAndAppendConclusionMessage();
                     this.emitEvent("result_producing_start");
 
                     return {
@@ -310,7 +310,7 @@ export class ReActAgent<Skills extends SchemaSkillStore, Memory extends SchemaMe
 
                 if (hasFinalOutput) {
                     if (this.agentConfig.withConclusion) {
-                        await this.appendConclusionMessage();
+                        await this.concludeAndAppendConclusionMessage();
                     }
                     this.emitEvent("result_producing_start");
                 }
@@ -463,7 +463,7 @@ export class ReActAgent<Skills extends SchemaSkillStore, Memory extends SchemaMe
     }
 
     // Generate the final conclusion with a dedicated LLM summary call over the full transcript.
-    private async appendConclusionMessage(): Promise<void> {
+    private async concludeAndAppendConclusionMessage(): Promise<void> {
         this.emitEvent("concluding_start");
         
         const transcript = this.agentConfig.messages
@@ -497,7 +497,7 @@ export class ReActAgent<Skills extends SchemaSkillStore, Memory extends SchemaMe
                 {
                     type: "user",
                     content: [
-                        "Write the final user-facing conclusion from this transcript.",
+                        "Write the final user-facing conclusion from this conversation transcript.",
                         "If there were tool results, use them as evidence.",
                         "If the run ended because of recall limit, summarize the best available answer.",
                         "",
