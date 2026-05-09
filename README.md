@@ -72,8 +72,10 @@ This is how to create ReAct agent
 ```typescript
     import { ReActAgent } from "raven-adk/agents";
     import { tool } from "raven-adk/tools";
+    import * as z from "zod";
     import { MongoDBSkillStore, SkillDiskStore } from "raven-adk/skills/store";
     import { MemoryChromaDBStore } from "raven-adk/memory/store";
+    import { HITLSocketIo } from "raven-adk/tools/hitl";
 
     const reactAgent = new ReActAgent({
         systemPrompt: `Your system prompt`,
@@ -106,7 +108,35 @@ This is how to create ReAct agent
                         temperatureFahrenheit: z.number().describe("Temperature in Fahrenheit Scale")
                     })
                 }
-            )
+            ),
+            // Dummy transfer_money tool — used in README example to match HITL toolsUsage
+            tool(
+                ({ amount, currency, recipient }) => {
+                    // This is a dummy implementation for documentation purposes only.
+                    // It does NOT perform any real transfer.
+                    return JSON.stringify({
+                        status: "mocked",
+                        transactionId: "tx_mock_0001",
+                        amount,
+                        currency,
+                        recipient
+                    })
+                },
+                {
+                    toolName: "transfer_money",
+                    toolDescription: "Dummy transfer money tool (mock). Do NOT use in production.",
+                    toolArguments: z.object({
+                        amount: z.number().describe("Amount to transfer"),
+                        currency: z.string().describe("Currency code, e.g. USD"),
+                        recipient: z.string().describe("Recipient account identifier or handle")
+                    }),
+                    toolOutputSchema: z.object({
+                        status: z.string().describe("Result status (mocked)"),
+                        transactionId: z.string().optional().describe("Simulated transaction id if available")
+                    })
+                }
+            ),
+            
         ],
         // Optional skills for agent — MongoDB-backed example
         // The MongoDBSkillStore expects a `collection` object that implements the
@@ -142,6 +172,26 @@ This is how to create ReAct agent
                 "* User subjects of interest: e.g: Ferrari Cars, Apple devices"
             ].join('\n'),
             session: 'your-session-id',
+        }),
+        // Optional Human-In-The-Loop. Agent asks only when really required.
+        hitl: new HITLSocketIo({
+            port: 3000,
+            questions: {
+                abcQuestion: {
+                    instruction: "Use only for decisions where one option must be chosen.",
+                    maxAnswersRange: ["a", "b", "c", "d"]
+                },
+                openQuestion: {
+                    instruction: "Use only when the required detail cannot be represented as predefined options."
+                }
+            },
+            toolsUsage: {
+                transfer_money: {
+                    delayMs: 30000,
+                    defaultAnswer: "deny"
+                },
+                delete_account: true
+            }
         }),
     });
 

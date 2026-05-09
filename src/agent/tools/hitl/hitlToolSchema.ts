@@ -1,3 +1,5 @@
+import { Tool } from "../tools";
+
 export type HITLToolAllowancePossibleAnswer = "allow" | "deny";
 
 export const DEFAULT_ABC_ANSWERS_RANGE = ["a", "b", "c"];
@@ -33,9 +35,19 @@ export interface HITLConfigSchema {
         } | boolean;
     };
     /**
-     * Determines whether to ask user are the tool(s) (multiple or single) allowed to use
-     * Object is the set with tools and specification according to tool usage
-     * Use a `delayMs` and `defaultAnswer` to specify default answer after time
+     * Determines whether to ask user are the tool(s) (multiple or single) allowed to use.
+     * Object is the set with tools and specification according to tool usage.
+     * Use a `delayMs` and `defaultAnswer` to specify default answer after time.
     */
     toolsUsage?: Record<string, ToolUsageConfObject | true>;
+}
+
+// TODO: Document the HITL in the HITL doc
+export interface HITLTransportSchema {
+    /** Describe how to use HITL Questioning tools */
+    questionHITLPrompt: string;
+    /**
+     * Create set of Questioning tools for HITL
+     */
+    createQuestionTools(): Tool<any, any>[];
 }

@@ -9,7 +9,11 @@ import { AgentMessagesGraphState, MessagesVariations } from "./state";
 import { Skills as SkillsInterface } from "./skills/skills";
 import { MCPTool } from "./tools/mcpTools";
 import { Tool } from "./tools/tools";
-import { HITLConfigSchema } from "./tools/hitl/hitlToolSchema";
+import { HITLSocketIo } from "./tools/hitl/trasnports/SocketIoHITLTrasnport";
+
+interface SubAgent {
+
+}
 
 interface ReActAgentConfig<Skills extends SchemaSkillStore, Memory extends SchemaMemoryStore> {
     model: OpenAI | Anthropic;
@@ -26,7 +30,9 @@ interface ReActAgentConfig<Skills extends SchemaSkillStore, Memory extends Schem
     memory?: Memory;
     tools: Tool<any, any>[];
     /** specify this schema to use the Human In The Loop */
-    hitl?: HITLConfigSchema;
+    hitl?: HITLSocketIo;
+    /** Subagents definition */
+    subagents?: SubAgent[];
     /** Maximum amount of internal self-recalls without tool usage. Defaults to 3 when omitted. */
     maximumReasoningRecalls?: number;
     /** As default is `true` boolean */
@@ -179,6 +185,7 @@ export class ReActAgent<Skills extends SchemaSkillStore, Memory extends SchemaMe
             REACT_SYSTEM_PROMPT += `\n\n## Create and manage skills as needed according to this specification:\n${SkillsInterface.createSkillsPrompt}`;
         }
 
+        // Add mempry
         if (this.agentMemoryInterface) {
             const memoryTools = this.agentMemoryInterface.createMemoryTools();
 
@@ -188,6 +195,18 @@ export class ReActAgent<Skills extends SchemaSkillStore, Memory extends SchemaMe
             ];
 
             REACT_SYSTEM_PROMPT += `\n\n\n\n## Memory and recall system:\n${MemoryInterface.memorySystemPrompt}\n\nYou've to remember following informations always when has occured in conversation transcript and were't already remembered:\n${this.agentMemoryInterface.store.config.hasToRemember}`;
+        }
+
+        // Add hitl handling
+        if (this.agentConfig.hitl) {
+            // Add questioning tools
+            this.agentConfig.tools = [
+                ...this.agentConfig.tools,
+                ...this.agentConfig.hitl.createQuestionTools()
+            ];
+
+            // Add questioning system prompt
+            REACT_SYSTEM_PROMPT += `\n\nQuestioning of user. Use questioning tools accroding to this specification to ask user about whatever:\n${this.agentConfig.hitl.questionHITLPrompt}`
         }
 
         // Preparation
@@ -328,11 +347,103 @@ export class ReActAgent<Skills extends SchemaSkillStore, Memory extends SchemaMe
                         definedTools.map((definedTool) => [definedTool.toolConfig.toolName, definedTool])
                     );
 
+                    // HITL calling for tools required HITL
+                    const approvalByCallIndex = new Map<
+                        number,
+                        { answer: "allow" | "deny"; reason: "user_answer" | "delay_pass" } | { errorMessage: string }
+                    >();
+                    type HITLApprovalResult =
+                        | {
+                            callIndex: number;
+                            allowance: { answer: "allow" | "deny"; reason: "user_answer" | "delay_pass" };
+                        }
+                        | {
+                            callIndex: number;
+                            errorMessage: string;
+                        };
+
+                    const hitlTransport = this.agentConfig.hitl;
+                    const toolsUsageConfig = this.agentConfig.hitl?.config.toolsUsage;
+
+                    if (hitlTransport && toolsUsageConfig) {
+                        const toolsRequiringApproval = state.callTools.tools
+                            .map((toolCall, callIndex) => {
+                                const toolName = toolCall.tool_name ?? toolCall.tool_id;
+
+                                if (!toolsUsageConfig[toolName]) {
+                                    return null;
+                                }
+
+                                return {
+                                    toolName,
+                                    callIndex
+                                };
+                            })
+                            .filter((approvalTarget): approvalTarget is { toolName: string; callIndex: number } => !!approvalTarget);
+
+                        const approvals: HITLApprovalResult[] = await Promise.all(
+                            toolsRequiringApproval.map(async ({ toolName, callIndex }) => {
+                                try {
+                                    const allowance = await hitlTransport.emitToolUsage(toolName);
+
+                                    return {
+                                        callIndex,
+                                        allowance
+                                    };
+                                } catch (error) {
+                                    const errorMessage = error instanceof Error ? error.message : "Unknown HITL approval error";
+
+                                    return {
+                                        callIndex,
+                                        errorMessage: `HITL approval for tool "${toolName}" failed: ${errorMessage}`
+                                    };
+                                }
+                            })
+                        );
+
+                        approvals.forEach((approvalResult) => {
+                            if ("allowance" in approvalResult) {
+                                approvalByCallIndex.set(approvalResult.callIndex, approvalResult.allowance);
+                                return;
+                            }
+
+                            approvalByCallIndex.set(approvalResult.callIndex, {
+                                errorMessage: approvalResult.errorMessage
+                            });
+                        });
+                    }
+
                     const toolsStatePrepared = await Promise.all(
-                        state.callTools.tools.map(async tool => {
+                        state.callTools.tools.map(async (tool, callIndex) => {
                             const toolName = tool.tool_name ?? tool.tool_id;
                             const definedTool = definedToolsByName.get(toolName);
                             const toolParams = tool.arguments ?? {};
+
+                            // --- HITL handle error for tool and deny
+                            const approvalResult = approvalByCallIndex.get(callIndex);
+
+                            if (approvalResult && "errorMessage" in approvalResult) {
+                                return {
+                                    ...tool,
+                                    tool_name: toolName,
+                                    toolError: approvalResult.errorMessage,
+                                    toolOutput: approvalResult.errorMessage,
+                                    content: approvalResult.errorMessage
+                                };
+                            }
+
+                            if (approvalResult && approvalResult.answer === "deny") {
+                                const denyOutput = `Tool "${toolName}" execution was denied by HITL (${approvalResult.reason}).`;
+
+                                return {
+                                    ...tool,
+                                    tool_name: toolName,
+                                    toolError: denyOutput,
+                                    toolOutput: denyOutput,
+                                    content: denyOutput
+                                };
+                            }
+                            // --- HITL End
 
                             if (!definedTool) {
                                 const missingToolError = `Tool couldn't be executed because tool with name "${toolName}" does not exist`;
