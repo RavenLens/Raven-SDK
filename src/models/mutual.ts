@@ -5,12 +5,12 @@ export interface LLMConfig {
     /** The model ID for specified provider e.g: GPT-5.5 */
     model: string;
     weight?: number;
-    tools: Tool<any, any>[];
+    tools?: Tool<any, any>[];
     apiKey?: string;
     /** The url to the custom provider */
     baseURL?: string;
     /** Specify here user message and the all messages are required to run the llm */
-    messages: MessagesVariations[];
+    messages?: MessagesVariations[];
 }
 
 export interface LLMAnswer {

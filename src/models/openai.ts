@@ -59,7 +59,7 @@ export class OpenAI implements StandardLLMShema {
 
     /** Parse messages and return in Responses API format */
     private prepareInput(): ResponsesAPI.ResponseInputItem[] {
-        return this.config.messages.map((message => { // Parse messages to openai compatible format
+        return this.config.messages?.map((message => { // Parse messages to openai compatible format
             switch(message.type) {
                 case "system":
                     return {
@@ -88,17 +88,17 @@ export class OpenAI implements StandardLLMShema {
                         output: message.content
                     } satisfies ResponsesAPI.ResponseCustomToolCallOutput
             }
-        }));
+        })) ?? [];
     }
 
     private prepareTools(): ResponsesAPI.CustomTool[] {
-        return this.config.tools.map(tool => {
+        return this.config.tools?.map(tool => {
             return {
                 type: "custom",
                 name: tool.toolConfig.toolName,
                 description: parseToolDescription(tool.toolConfig)
             }
-        })
+        }) ?? []
     }
 
     private prepareCreatePayload(): Omit<ResponsesAPI.ResponseCreateParamsBase, "stream"> {
@@ -141,7 +141,7 @@ export class OpenAI implements StandardLLMShema {
         return {
             messages: [
                 // Standalone messages
-                ...this.config.messages,
+                ...(this.config.messages ?? []),
                 // AI answer
                 ...answer
             ],

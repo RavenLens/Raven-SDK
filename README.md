@@ -72,12 +72,18 @@ This is how to create ReAct agent
 ```typescript
     import { ReActAgent } from "raven-adk/agents";
     import { tool } from "raven-adk/tools";
+    import { OpenAI, Anthropic } from "raven-adk/models";
     import * as z from "zod";
     import { MongoDBSkillStore, SkillDiskStore } from "raven-adk/skills/store";
     import { MemoryChromaDBStore } from "raven-adk/memory/store";
     import { HITLSocketIo } from "raven-adk/tools/hitl";
 
     const reactAgent = new ReActAgent({
+        model: new OpenAI({
+            model: "gpt-5.5",
+            reasoningEffort: "xhigh",
+            apiKey: "your-api-key",
+        }),
         systemPrompt: `Your system prompt`,
         messages: [
             {
@@ -193,6 +199,27 @@ This is how to create ReAct agent
                 delete_account: true
             }
         }),
+        // Optional: Specify your subagents
+        subagents: [
+            {
+                role: "actor",
+                roleDescritpion: "You're the professional Hollywood actor",
+                systemPrompt: `...Agent System Prompt`,
+                model: new Anthropic({
+                    model: "claude-sonnet-4-6"
+                    apiKey: "your-api-key",
+                    thinking: {
+                        type: "enabled",
+                        budget_tokens: 10_000,
+                        display: "summarized"
+                    },
+                    max_tokens: 16_000
+                }),
+                // Optional list with tools,
+                tools: []
+            },
+            // ... Define more subagents below
+        ]
     });
 
     // Listend agent events

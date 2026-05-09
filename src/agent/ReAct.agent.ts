@@ -10,13 +10,17 @@ import { Skills as SkillsInterface } from "./skills/skills";
 import { MCPTool } from "./tools/mcpTools";
 import { Tool } from "./tools/tools";
 import { HITLSocketIo } from "./tools/hitl/trasnports/SocketIoHITLTrasnport";
+import { RunPod } from "../models/runpod";
 
-interface SubAgent {
+type AgentModel = OpenAI | Anthropic | RunPod;
 
+type SubAgent = Pick<ReActAgentConfig<any, any>, "model" | "systemPrompt" | "tools"> & {
+    role: string;
+    roleDescription: string;
 }
 
 interface ReActAgentConfig<Skills extends SchemaSkillStore, Memory extends SchemaMemoryStore> {
-    model: OpenAI | Anthropic;
+    model: AgentModel;
     systemPrompt: string;
     messages: MessagesVariations[];
     /**
@@ -209,6 +213,16 @@ export class ReActAgent<Skills extends SchemaSkillStore, Memory extends SchemaMe
             REACT_SYSTEM_PROMPT += `\n\nQuestioning of user. Use questioning tools accroding to this specification to ask user about whatever:\n${this.agentConfig.hitl.questionHITLPrompt}`
         }
 
+        // Subagents
+        /** TODO:
+            * * System prompt - if subagents were specified
+            *  - give agent subagents list with roles description
+            *  - give instruction when to call subagents
+        */
+        if (this.agentConfig.subagents?.length) {
+            
+        }
+
         // Preparation
         this.ensureWrappedSystemPrompt();
         this.synchronizeModelConfig();
@@ -216,6 +230,9 @@ export class ReActAgent<Skills extends SchemaSkillStore, Memory extends SchemaMe
         const reactAgentGraph = new Graph<AgentMessagesGraphState>({});
 
         reactAgentGraph
+            /**TODO:
+             * Add subagents calling logic
+            */
             .addNode("main_node", async state => {
                 let currentState = state;
 
@@ -510,6 +527,15 @@ export class ReActAgent<Skills extends SchemaSkillStore, Memory extends SchemaMe
             .addEdge(GraphMarkers.START, "main_node")
             .addEdge("main_node", GraphMarkers.END);
 
+        // Spawn separate nodes where each of node is subagent
+        if (this.agentConfig.subagents?.length) {
+            for (const agent of this.agentConfig.subagents) {
+                reactAgentGraph.addNode(agent.role, state => {
+                    // TODO: Add logic
+                });
+            }
+        }
+        
         this.AgentGraph = reactAgentGraph;
     }
 

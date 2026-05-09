@@ -76,7 +76,7 @@ export class RunPod implements StandardLLMShema {
 			return this.config.inputMode;
 		}
 
-		const requiresStructuredMessages = this.config.messages.some((message) => {
+		const requiresStructuredMessages = this.config.messages?.some((message) => {
 			return message.type === "ai" || message.type === "thinking" || message.type === "tool";
 		});
 
@@ -84,7 +84,7 @@ export class RunPod implements StandardLLMShema {
 	}
 
 	private prepareChatMessages(): RunPodChatMessage[] {
-		return this.config.messages.map((message) => {
+		return this.config.messages?.map((message) => {
 			switch (message.type) {
 				case "system":
 					return {
@@ -115,27 +115,26 @@ export class RunPod implements StandardLLMShema {
 						].join("\n")
 					};
 			}
-		});
+		}) ?? [];
 	}
 
 	private preparePrompt(): string {
-		return this.config.messages
-			.map((message) => {
-				switch (message.type) {
-					case "system":
-						return `System: ${message.content}`;
-					case "user":
-						return `User: ${message.content}`;
-					case "ai":
-						return `Assistant: ${message.content ?? ""}`;
-					case "thinking":
-						return `Assistant thoughts: ${message.content}`;
-					case "tool":
-						return `Tool ${message.tool_name ?? message.tool_id}: ${message.toolOutput ?? message.content}`;
-				}
-			})
-			.join("\n\n")
-			.trim();
+		return this.config.messages?.map((message) => {
+			switch (message.type) {
+				case "system":
+					return `System: ${message.content}`;
+				case "user":
+					return `User: ${message.content}`;
+				case "ai":
+					return `Assistant: ${message.content ?? ""}`;
+				case "thinking":
+					return `Assistant thoughts: ${message.content}`;
+				case "tool":
+					return `Tool ${message.tool_name ?? message.tool_id}: ${message.toolOutput ?? message.content}`;
+			}
+		})
+		.join("\n\n")
+		.trim() ?? "";
 	}
 
 	private buildInput(stream: boolean): RunPodPayload {
@@ -340,7 +339,7 @@ export class RunPod implements StandardLLMShema {
 
 		return {
 			messages: [
-				...this.config.messages,
+				...(this.config.messages ?? []),
 				aiAnswer
 			],
 			answer: [aiAnswer],

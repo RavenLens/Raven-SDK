@@ -34,8 +34,7 @@ export class Anthropic implements StandardLLMShema {
     }
 
     private prepareMessages(): MessageParam[] {
-        return this.config.messages
-            .filter((message) => message.type !== "system")
+        return this.config.messages?.filter((message) => message.type !== "system")
             .map((message) => {
             switch (message.type) {
                 case "user":
@@ -80,11 +79,11 @@ export class Anthropic implements StandardLLMShema {
                         ]
                     } satisfies MessageParam;
             }
-        });
+        }) ?? [];
     }
 
     private prepareSystemPrompt(): string | undefined {
-        const systemMessages = this.config.messages
+        const systemMessages = (this.config.messages ?? [])
             .filter((message): message is { type: "system"; content: string } => message.type === "system")
             .map((message) => message.content.trim())
             .filter((content) => content.length > 0);
@@ -97,7 +96,7 @@ export class Anthropic implements StandardLLMShema {
     }
 
     private prepareTools(): Tool[] {
-        return this.config.tools.map((tool) => {
+        return (this.config.tools ?? []).map((tool) => {
             const inputSchemaRaw = z.toJSONSchema(tool.toolConfig.toolArguments);
 
             return {
@@ -186,7 +185,7 @@ export class Anthropic implements StandardLLMShema {
         // Output message
         return {
             messages: [
-                ...this.config.messages,
+                ...(this.config.messages ?? []),
                 ...answer
             ],
             answer,
