@@ -1,7 +1,7 @@
 import "dotenv/config";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
-import { tool } from "../src/agent/tools";
+import { tool } from "../src/agent/tools/tools";
 import { OpenAI } from "../src/models/openai";
 
 const { openaiResponsesCreateMock, openaiCtorMock } = vi.hoisted(() => ({
@@ -134,6 +134,7 @@ describe("OpenAI model wrapper", () => {
                     {
                         type: "tool",
                         tool_id: "call_1",
+                        tool_name: "get_weather",
                         content: '{"location":"Paris"}',
                         arguments: { location: "Paris" }
                     }
@@ -142,6 +143,7 @@ describe("OpenAI model wrapper", () => {
             {
                 type: "tool",
                 tool_id: "call_1",
+                tool_name: "get_weather",
                 content: '{"location":"Paris"}',
                 arguments: { location: "Paris" }
             }
@@ -210,5 +212,114 @@ describe("OpenAI model wrapper", () => {
         );
         expect(iteratedEvents).toStrictEqual(streamEvents);
         expect(emittedEvents).toStrictEqual(streamEvents);
+    });
+
+    it("retries invokeStructuredOutput until the response matches the schema", async () => {
+        openaiResponsesCreateMock
+            .mockResolvedValueOnce({
+                id: "resp_invalid",
+                created_at: 1,
+                output_text: "not json",
+                error: null,
+                incomplete_details: null,
+                instructions: null,
+                metadata: null,
+                model: "gpt-4.1-mini",
+                object: "response",
+                output: [],
+                parallel_tool_calls: false,
+                temperature: null,
+                tool_choice: "auto",
+                tools: [],
+                usage: {
+                    input_tokens: 8,
+                    output_tokens: 3,
+                    total_tokens: 11,
+                    input_tokens_details: {
+                        cached_tokens: 0
+                    },
+                    output_tokens_details: {
+                        reasoning_tokens: 0
+                    }
+                },
+                top_p: 1,
+                text: {
+                    format: {
+                        type: "text"
+                    }
+                },
+                status: "completed"
+            })
+            .mockResolvedValueOnce({
+                id: "resp_valid",
+                created_at: 2,
+                output_text: '{"city":"Paris","country":"France"}',
+                error: null,
+                incomplete_details: null,
+                instructions: null,
+                metadata: null,
+                model: "gpt-4.1-mini",
+                object: "response",
+                output: [],
+                parallel_tool_calls: false,
+                temperature: null,
+                tool_choice: "auto",
+                tools: [],
+                usage: {
+                    input_tokens: 9,
+                    output_tokens: 4,
+                    total_tokens: 13,
+                    input_tokens_details: {
+                        cached_tokens: 0
+                    },
+                    output_tokens_details: {
+                        reasoning_tokens: 0
+                    }
+                },
+                top_p: 1,
+                text: {
+                    format: {
+                        type: "text"
+                    }
+                },
+                status: "completed"
+            });
+
+        const model = new OpenAI({
+            model: "gpt-4.1-mini",
+            apiKey: "test-key",
+            tools: [],
+            messages: [
+                { type: "user", content: "Return a JSON object with city and country for Paris, France." }
+            ]
+        });
+
+        const schema = z.object({
+            city: z.string(),
+            country: z.string()
+        });
+
+        const result = await model.invokeStructuredOutput(schema, 1);
+
+        expect(openaiResponsesCreateMock).toHaveBeenCalledTimes(2);
+        expect(result.answer).toHaveLength(1);
+        expect(result.answer[0]).toStrictEqual({
+            type: "ai",
+            content: '{"city":"Paris","country":"France"}',
+            calledTools: [],
+            structuredOutput: {
+                city: "Paris",
+                country: "France"
+            }
+        });
+        expect(result.messages.at(-1)).toStrictEqual({
+            type: "ai",
+            content: '{"city":"Paris","country":"France"}',
+            calledTools: [],
+            structuredOutput: {
+                city: "Paris",
+                country: "France"
+            }
+        });
     });
 });

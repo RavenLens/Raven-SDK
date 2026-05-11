@@ -1,3 +1,4 @@
+import * as z from "zod";
 import { AIMessage, MessagesVariations, ReasoningMessage, ToolMessage } from "../agent/state";
 import { Tool } from "../agent/tools/tools";
 
@@ -36,4 +37,5 @@ export interface StandardLLMShema {
     apiName: "Anthropic" | "OpenAI" | { custom: string };
     config: LLMConfig;
     invoke(): Promise<LLMAnswer>;
+    invokeStructuredOutput(schema: z.ZodTypeAny, maxRecallTries?: number): Promise<LLMAnswer>;
 }

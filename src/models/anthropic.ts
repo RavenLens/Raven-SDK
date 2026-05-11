@@ -5,6 +5,7 @@ import { parseToolCallContentToParams, parseToolDescription } from "../agent/too
 import { AIMessage, ReasoningMessage, ToolMessage } from "../agent/state";
 import * as z from "zod";
 import { ThinkingConfigParam } from "@anthropic-ai/sdk/resources";
+import { invokeStructuredOutputWithRetries } from "./structuredOutput";
 
 export interface AnthropicConfig extends LLMConfig {
     thinking?: ThinkingConfigParam;
@@ -198,8 +199,8 @@ export class Anthropic implements StandardLLMShema {
     }
 
     async invoke(): Promise<LLMAnswer>;
-    async invoke(options?: { stream?: false | undefined, messages: InvokeOptions["messages"] } | undefined): Promise<LLMAnswer>;
-    async invoke(options: { stream: true, messages: InvokeOptions["messages"] }): Promise<AsyncIterable<AnthropicStandalone.Messages.RawMessageStreamEvent>>;
+    async invoke(options?: { stream?: false | undefined; messages?: InvokeOptions["messages"] } | undefined): Promise<LLMAnswer>;
+    async invoke(options: { stream: true; messages?: InvokeOptions["messages"] }): Promise<AsyncIterable<AnthropicStandalone.Messages.RawMessageStreamEvent>>;
     async invoke(options?: InvokeOptions): Promise<LLMAnswer | AsyncIterable<AnthropicStandalone.Messages.RawMessageStreamEvent>> {
         if (options?.messages) {
             this.config.messages = options.messages;
@@ -222,5 +223,21 @@ export class Anthropic implements StandardLLMShema {
             const completion = await this.anthropic.messages.create(config);
             return this.prepareSyncAnswer(completion);
         }
+    }
+
+    async invokeStructuredOutput(schema: z.ZodTypeAny, maxRecallTries?: number): Promise<LLMAnswer> {
+        return invokeStructuredOutputWithRetries({
+            schema,
+            maxRecallTries,
+            messages: this.config.messages,
+            getTools: () => this.config.tools,
+            setMessages: (messages) => {
+                this.config.messages = messages;
+            },
+            setTools: (tools) => {
+                this.config.tools = tools;
+            },
+            invoke: () => this.invoke()
+        });
     }
 }

@@ -11,6 +11,7 @@ import { MCPTool } from "./tools/mcpTools";
 import { Tool } from "./tools/tools";
 import { HITLSocketIo } from "./tools/hitl/trasnports/SocketIoHITLTrasnport";
 import { RunPod } from "../models/runpod";
+import z from "zod";
 
 type AgentModel = OpenAI | Anthropic | RunPod;
 
@@ -349,6 +350,9 @@ export class ReActAgent<Skills extends SchemaSkillStore, Memory extends SchemaMe
                     if (this.agentConfig.withConclusion) {
                         await this.concludeAndAppendConclusionMessage();
                     }
+                    else if (this.AgentGraph.graphState.produceStructuredOutput) {
+                        await this.concludeWithStructuredOutput();
+                    }
                     this.emitEvent("result_producing_start");
                 }
 
@@ -530,8 +534,10 @@ export class ReActAgent<Skills extends SchemaSkillStore, Memory extends SchemaMe
         // Spawn separate nodes where each of node is subagent
         if (this.agentConfig.subagents?.length) {
             for (const agent of this.agentConfig.subagents) {
-                reactAgentGraph.addNode(agent.role, state => {
-                    // TODO: Add logic
+                reactAgentGraph.addNode(agent.role, async state => {
+                    return {
+                        stateUpdate: state
+                    };
                 });
             }
         }
@@ -671,6 +677,75 @@ export class ReActAgent<Skills extends SchemaSkillStore, Memory extends SchemaMe
         }
     }
 
+    /** conclude final message with usage of the schema use wants */
+    private async concludeWithStructuredOutput(): Promise<void> {
+        const produceConfig = this.AgentGraph.graphState.produceStructuredOutput;
+        if (!produceConfig) return;
+
+        const { zodSchema, retriesCount } = produceConfig;
+
+        const transcript = this.agentConfig.messages
+            .map((message, index) => {
+                const label = `${index + 1}. ${message.type}`;
+
+                if (message.type === "tool") {
+                    const toolName = message.tool_name ?? message.tool_id;
+                    const output = message.toolOutput ?? message.content;
+                    return `${label} | ${toolName}: ${output}`;
+                }
+
+                if (message.type === "thinking") {
+                    return `${label} | ${message.content}`;
+                }
+
+                return `${label} | ${message.content}`;
+            })
+            .join("\n");
+
+        const previousTools = this.agentConfig.model.config.tools;
+        const previousMessages = this.agentConfig.model.config.messages;
+
+        try {
+            this.agentConfig.model.config.tools = [];
+            this.agentConfig.model.config.messages = [
+                {
+                    type: "system",
+                    content: CONCLUSION_SYSTEM_PROMPT
+                },
+                {
+                    type: "user",
+                    content: [
+                        "Extract and return the final structured output from this conversation transcript, following the provided schema exactly.",
+                        "If there were tool results, use them as evidence.",
+                        "",
+                        transcript
+                    ].join("\n")
+                }
+            ];
+
+            const structuredResult = await this.agentConfig.model.invokeStructuredOutput(zodSchema, retriesCount);
+            this.calculateUsedTokens(structuredResult);
+            this.emitEvent("llm_result", structuredResult);
+
+            const aiMessage = structuredResult.answer.find(
+                (message): message is Extract<MessagesVariations, { type: "ai" }> => message.type === "ai"
+            );
+
+            this.agentConfig.messages = [
+                ...this.agentConfig.messages,
+                {
+                    type: "ai",
+                    content: aiMessage?.content ?? null,
+                    structuredOutput: aiMessage?.structuredOutput
+                }
+            ];
+        } finally {
+            this.agentConfig.model.config.tools = previousTools;
+            this.agentConfig.model.config.messages = previousMessages;
+            this.synchronizeModelConfig();
+        }
+    }
+
     private ensureWrappedSystemPrompt(): void {
         const wrappedSystemPrompt = this.buildWrappedSystemPrompt(this.agentConfig.systemPrompt);
         const nonSystemMessages = this.agentConfig.messages.filter(message => message.type !== "system");
@@ -797,10 +872,15 @@ export class ReActAgent<Skills extends SchemaSkillStore, Memory extends SchemaMe
         };
     }
 
-    async invoke(): Promise<ReActAgentInvokeResult> {
+    /**
+     * 
+     * @param withGraphState - is the optional parameter with what the graph will start
+     * @returns 
+     */
+    private async runGraph(withGraphState?: Record<string, any>): Promise<ReActAgentInvokeResult> {
         this.ensureWrappedSystemPrompt();
         this.synchronizeModelConfig();
-        this.AgentGraph.graphState = {};
+        this.AgentGraph.graphState = withGraphState ?? {};
 
         await this.AgentGraph.start();
 
@@ -810,6 +890,10 @@ export class ReActAgent<Skills extends SchemaSkillStore, Memory extends SchemaMe
             messages: this.agentConfig.messages,
             state: this.AgentGraph.getState()
         };
+    }
+    
+    async invoke(): Promise<ReActAgentInvokeResult> {
+        return await this.runGraph();
     }
 
     async invokeStream(): Promise<AsyncIterable<ReActAgentStreamChunk>> {
@@ -868,6 +952,15 @@ export class ReActAgent<Skills extends SchemaSkillStore, Memory extends SchemaMe
                 }
             }
         };
+    }
+
+    async invokeStructuredOutput(schema: z.ZodType, maxRecallTries?: number): Promise<ReActAgentInvokeResult> {
+        return await this.runGraph({
+            produceStructuredOutput: {
+                zodSchema: schema,
+                retriesCount: maxRecallTries ?? 5
+            }
+        } satisfies AgentMessagesGraphState)
     }
 
     public get messages() {

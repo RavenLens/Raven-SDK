@@ -1,6 +1,8 @@
 import runpodSdk from "runpod-sdk";
-import { AIMessage, MessagesVariations } from "../agent/state";
+import * as z from "zod";
+import { AIMessage } from "../agent/state";
 import { InvokeOptions, LLMAnswer, LLMConfig, StandardLLMShema } from "./mutual";
+import { invokeStructuredOutputWithRetries } from "./structuredOutput";
 
 export interface RunPodConfig extends LLMConfig {
 	endpointId: string;
@@ -363,8 +365,8 @@ export class RunPod implements StandardLLMShema {
 	}
 
 	async invoke(): Promise<LLMAnswer>;
-	async invoke(options?: { stream?: false | undefined; messages: InvokeOptions["messages"] }): Promise<LLMAnswer>;
-	async invoke(options: { stream: true; messages: InvokeOptions["messages"] }): Promise<AsyncIterable<unknown>>;
+	async invoke(options?: { stream?: false | undefined; messages?: InvokeOptions["messages"] }): Promise<LLMAnswer>;
+	async invoke(options: { stream: true; messages?: InvokeOptions["messages"] }): Promise<AsyncIterable<unknown>>;
 	async invoke(options?: InvokeOptions): Promise<LLMAnswer | AsyncIterable<unknown>> {
 		if (options?.messages) {
 			this.config.messages = options.messages;
@@ -380,5 +382,21 @@ export class RunPod implements StandardLLMShema {
 		const response = await this.endpoint.runSync(payload, this.config.requestTimeout);
 
 		return this.parseResponseToAnswer(response);
+	}
+
+	async invokeStructuredOutput(schema: z.ZodTypeAny, maxRecallTries?: number): Promise<LLMAnswer> {
+		return invokeStructuredOutputWithRetries({
+			schema,
+			maxRecallTries,
+			messages: this.config.messages,
+			getTools: () => this.config.tools,
+			setMessages: (messages) => {
+				this.config.messages = messages;
+			},
+			setTools: (tools) => {
+				this.config.tools = tools;
+			},
+			invoke: () => this.invoke()
+		});
 	}
 }

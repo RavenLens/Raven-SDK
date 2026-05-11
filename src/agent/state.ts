@@ -1,6 +1,7 @@
 import { ChatCompletionAssistantMessageParam, ChatCompletionAudio } from "openai/resources.js";
 import { GraphNodeExecutionResult } from "../graph";
 import { LLMAnswer } from "../models/mutual";
+import z from "zod";
 
 /**
  * Is the system prompt with instruction for the llm and agent
@@ -21,6 +22,8 @@ export interface UserMessage {
 export interface AIMessage {
     type: "ai";
     content?: string | null;
+    /** Included only for structured output calls */
+    structuredOutput?: unknown;
     audioInput?: ChatCompletionAssistantMessageParam.Audio | null;
     audioOutput?: ChatCompletionAudio | null;
     /** Attached when ai had in message the tool call */
@@ -70,6 +73,15 @@ export interface AgentMessagesGraphState {
          * Retrive tool answer as `toolOutput` prop when tool was executed or `error` with reason
         */
         tools: ToolMessage[];
+    };
+    /** 
+     * When passed agent will return the outcome message has the specified schema
+     * When retries tries was exceeded the agent will throw error
+     * Structured output is the result of full agent task and generated as the conclusion at the end of agent loop instead of original conclusion is optionally available as the param
+    */
+    produceStructuredOutput?: {
+        zodSchema: z.ZodType;
+        retriesCount: number;
     };
     /** Number of times the model requested an internal main_node recall without tools. */
     reasoningRecallsCount?: number;

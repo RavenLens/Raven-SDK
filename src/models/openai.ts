@@ -4,6 +4,8 @@ import type * as ResponsesAPI from "openai/resources/responses/responses";
 import { parseToolCallContentToParams, parseToolDescription } from "../agent/tools/tools";
 import { AIMessage, ToolMessage } from "../agent/state";
 import { ReasoningEffort } from "openai/resources";
+import * as z from "zod";
+import { invokeStructuredOutputWithRetries } from "./structuredOutput";
 
 export interface OpenAIConfig extends LLMConfig {
     reasoningEffort?: ReasoningEffort | null
@@ -162,8 +164,8 @@ export class OpenAI implements StandardLLMShema {
     }
 
     async invoke(): Promise<LLMAnswer>;
-    async invoke(options: { stream?: false | undefined, messages: InvokeOptions["messages"] }): Promise<LLMAnswer>;
-    async invoke(options: { stream: true, messages: InvokeOptions["messages"] }): Promise<AsyncIterable<ResponsesAPI.ResponseStreamEvent>>;
+    async invoke(options?: { stream?: false | undefined; messages?: InvokeOptions["messages"] }): Promise<LLMAnswer>;
+    async invoke(options: { stream: true; messages?: InvokeOptions["messages"] }): Promise<AsyncIterable<ResponsesAPI.ResponseStreamEvent>>;
     async invoke(options?: InvokeOptions): Promise<LLMAnswer | AsyncIterable<ResponsesAPI.ResponseStreamEvent>> {
         if (options?.messages) {
             this.config.messages = options.messages;
@@ -189,5 +191,21 @@ export class OpenAI implements StandardLLMShema {
 
         const response = await this.openai.responses.create(responsePayload);
         return this.parseResponseToAnswer(response);
+    }
+
+    async invokeStructuredOutput(schema: z.ZodTypeAny, maxRecallTries?: number): Promise<LLMAnswer> {
+        return invokeStructuredOutputWithRetries({
+            schema,
+            maxRecallTries,
+            messages: this.config.messages,
+            getTools: () => this.config.tools,
+            setMessages: (messages) => {
+                this.config.messages = messages;
+            },
+            setTools: (tools) => {
+                this.config.tools = tools;
+            },
+            invoke: () => this.invoke()
+        });
     }
 }
