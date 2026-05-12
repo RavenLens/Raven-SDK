@@ -221,9 +221,6 @@ export class ReActAgent<Skills extends SchemaSkillStore, Memory extends SchemaMe
         const reactAgentGraph = new Graph<AgentMessagesGraphState>({});
 
         reactAgentGraph
-            /**TODO:
-             * Add subagents calling logic
-            */
             .addNode("main_node", async state => {
                 let currentState = state;
 
@@ -548,12 +545,58 @@ export class ReActAgent<Skills extends SchemaSkillStore, Memory extends SchemaMe
 
                     this.calculateUsedTokens({ tokens: subagent.usedTokens } as LLMAnswer);
 
-                    const newMessages = result.messages.slice(this.agentConfig.messages.length);
+                    // Detect if subagent requested an internal recall for the main node
+                    const subagentRecall = this.parseRecallInstruction(result.messages);
+
+                    // Prepare messages to merge: strip raw recall directive from subagent messages
+                    let messagesToMerge = result.messages;
+                    const lastMsg = messagesToMerge.at(-1);
+                    if (lastMsg?.type === "ai" && lastMsg.content?.trim().startsWith(RECALL_MAIN_NODE_PREFIX)) {
+                        messagesToMerge = messagesToMerge.slice(0, -1);
+                    }
 
                     this.agentConfig.messages = [
                         ...this.agentConfig.messages,
-                        ...newMessages
+                        ...messagesToMerge // subagent messages to full set of messages
                     ];
+
+                    // If subagent requested recall, convert it into main internal recall flow
+                    if (subagentRecall) {
+                        const recallsCount = state.reasoningRecallsCount ?? 0;
+                        const maxRecalls = this.getMaximumReasoningRecalls();
+                        if (recallsCount < maxRecalls) {
+                            const nextRecallCount = recallsCount + 1;
+
+                            // Persist an internal recall instruction so the next model pass has explicit focus.
+                            this.agentConfig.messages = [
+                                ...this.agentConfig.messages,
+                                {
+                                    type: "user",
+                                    content: `[INTERNAL_REASONING_RECALL ${nextRecallCount}/${maxRecalls}] ${subagentRecall}`
+                                }
+                            ];
+
+                            return {
+                                callNode: "main_node",
+                                stateUpdate: {
+                                    ...state,
+                                    reasoningRecallsCount: nextRecallCount
+                                }
+                            };
+                        }
+
+                        // Exceeded recall limit: conclude
+                        await this.concludeAndAppendConclusionMessage();
+                        this.emitEvent("result_producing_start");
+
+                        return {
+                            callNode: "main_node",
+                            stateUpdate: {
+                                ...state,
+                                reasoningRecallsCount: recallsCount
+                            }
+                        };
+                    }
 
                     return {
                         callNode: "main_node",
