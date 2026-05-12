@@ -154,6 +154,7 @@ export class ReActAgent<Skills extends SchemaSkillStore, Memory extends SchemaMe
     constructor(config: ReActAgentConfig<Skills, Memory>) {
         this.agentConfig = {
             ...config,
+            tools: [...config.tools],
             // Agent generate conclusion by default
             withConclusion: config.withConclusion ?? true
         };
@@ -174,55 +175,44 @@ export class ReActAgent<Skills extends SchemaSkillStore, Memory extends SchemaMe
             const executeSkillTools = this.agentSkillsInterface.createSkillScriptExecuteTools();
             const managementSkillsTools = this.agentSkillsInterface?.createManageSkillAgentTools();
             
-            // Skills explore. tools prep
-            this.agentConfig.tools = [
-                ...this.agentConfig.tools,
-                ...(this.agentSkillsInterface ? [...exploreSkillTools, ...executeSkillTools, ...managementSkillsTools] : [])
+            const newTools = [
+                ...exploreSkillTools, 
+                ...executeSkillTools, 
+                ...(managementSkillsTools || [])
             ];
 
-            // Add Skills exploration system prompt
-            REACT_SYSTEM_PROMPT += `\n\n## Explore your skills and use them according to this specification:\n${SkillsInterface.exploreSkillsPrompt}`;
-
-            // Add skills script execution system prompt
-            REACT_SYSTEM_PROMPT += `\n\n## Execute skill scripts and CLI commands according to this specification:\n${SkillsInterface.executeSkillScriptsPrompt}`;
-            
-            // Add skills management system prompt
-            REACT_SYSTEM_PROMPT += `\n\n## Create and manage skills as needed according to this specification:\n${SkillsInterface.createSkillsPrompt}`;
+            for (const tool of newTools) {
+                if (!this.agentConfig.tools.find(t => t.toolConfig.toolName === tool.toolConfig.toolName)) {
+                    this.agentConfig.tools.push(tool);
+                }
+            }
         }
 
-        // Add mempry
+        // Add memory
         if (this.agentMemoryInterface) {
             const memoryTools = this.agentMemoryInterface.createMemoryTools();
 
-            this.agentConfig.tools = [
-                ...this.agentConfig.tools,
-                ...memoryTools
-            ];
-
-            REACT_SYSTEM_PROMPT += `\n\n\n\n## Memory and recall system:\n${MemoryInterface.memorySystemPrompt}\n\nYou've to remember following informations always when has occured in conversation transcript and were't already remembered:\n${this.agentMemoryInterface.store.config.hasToRemember}`;
+            for (const tool of memoryTools) {
+                if (!this.agentConfig.tools.find(t => t.toolConfig.toolName === tool.toolConfig.toolName)) {
+                    this.agentConfig.tools.push(tool);
+                }
+            }
         }
 
         // Add hitl handling
         if (this.agentConfig.hitl) {
             // Add questioning tools
-            this.agentConfig.tools = [
-                ...this.agentConfig.tools,
-                ...this.agentConfig.hitl.createQuestionTools()
-            ];
+            const questionTools = this.agentConfig.hitl.createQuestionTools();
 
-            // Add questioning system prompt
-            REACT_SYSTEM_PROMPT += `\n\nQuestioning of user. Use questioning tools accroding to this specification to ask user about whatever:\n${this.agentConfig.hitl.questionHITLPrompt}`
+            for (const tool of questionTools) {
+                if (!this.agentConfig.tools.find(t => t.toolConfig.toolName === tool.toolConfig.toolName)) {
+                    this.agentConfig.tools.push(tool);
+                }
+            }
         }
 
-        // Subagents
-        /** TODO:
-            * * System prompt - if subagents were specified
-            *  - give agent subagents list with roles description
-            *  - give instruction when to call subagents
-        */
-        if (this.agentConfig.subagents?.length) {
-            
-        }
+        // Subagents are configured and will be spawned as graph nodes below
+        // System prompt is dynamically generated in buildWrappedSystemPrompt()
 
         // Preparation
         this.ensureWrappedSystemPrompt();
@@ -302,43 +292,40 @@ export class ReActAgent<Skills extends SchemaSkillStore, Memory extends SchemaMe
                     };
                 }
 
-                // Parse special model command to re-enter `main_node` without tool usage.
-                const recallInstruction = this.parseRecallInstruction(modelInvoke.answer);
-                if (recallInstruction) {
-                    const recallsCount = currentState.reasoningRecallsCount ?? 0;
-                    const maxRecalls = this.getMaximumReasoningRecalls();
-                    this.stripRecallDirectiveFromTail();
+                // Parse special model command to call a subagent
+                const subagentInstruction = this.parseSubagentInstruction(modelInvoke.answer);
+                if (subagentInstruction) {
+                    const { role, instruction } = subagentInstruction;
+                    const subagentExists = this.agentConfig.subagents?.some(a => a.role === role);
+                    
+                    this.stripSubagentDirectiveFromTail();
 
-                    if (recallsCount < maxRecalls) {
-                        const nextRecallCount = recallsCount + 1;
-
-                        // Persist an internal recall instruction so the next model pass has explicit focus.
+                    if (subagentExists) {
                         this.agentConfig.messages = [
                             ...this.agentConfig.messages,
                             {
                                 type: "user",
-                                content: `[INTERNAL_REASONING_RECALL ${nextRecallCount}/${maxRecalls}] ${recallInstruction}`
+                                content: `[CALLING SUBAGENT: ${role}] Task: ${instruction}`
                             }
                         ];
 
                         return {
-                            callNode: "main_node",
-                            stateUpdate: {
-                                ...currentState,
-                                reasoningRecallsCount: nextRecallCount
+                            callNode: role,
+                            stateUpdate: currentState
+                        };
+                    } else {
+                        this.agentConfig.messages = [
+                            ...this.agentConfig.messages,
+                            {
+                                type: "user",
+                                content: `Error: Subagent with role "${role}" does not exist. Available roles: ${this.agentConfig.subagents?.map(a => a.role).join(", ") || "None"}`
                             }
+                        ];
+                        return {
+                            callNode: "main_node",
+                            stateUpdate: currentState
                         };
                     }
-
-                    await this.concludeAndAppendConclusionMessage();
-                    this.emitEvent("result_producing_start");
-
-                    return {
-                        stateUpdate: {
-                            ...currentState,
-                            reasoningRecallsCount: recallsCount
-                        }
-                    };
                 }
 
                 // Check is the output the ai assistant
@@ -535,7 +522,41 @@ export class ReActAgent<Skills extends SchemaSkillStore, Memory extends SchemaMe
         if (this.agentConfig.subagents?.length) {
             for (const agent of this.agentConfig.subagents) {
                 reactAgentGraph.addNode(agent.role, async state => {
+                    const subagent = new ReActAgent<Skills, Memory>({
+                        model: agent.model,
+                        systemPrompt: agent.systemPrompt,
+                        messages: [
+                            ...this.agentConfig.messages
+                        ],
+                        skills: this.agentConfig.skills,
+                        memory: this.agentConfig.memory,
+                        hitl: this.agentConfig.hitl,
+                        tools: [
+                            ...this.agentConfig.tools,
+                            ...agent.tools
+                        ],
+                        subagents: this.agentConfig.subagents,
+                        withConclusion: true
+                    });
+
+                    subagent.onEvent("llm_result", (result) => this.emitEvent("llm_result", result));
+                    subagent.onEvent("tool_invoked", (name, params) => this.emitEvent("tool_invoked", name, params));
+                    subagent.onEvent("tool_executed", (name, params, out) => this.emitEvent("tool_executed", name, params, out));
+                    subagent.onEvent("reasoning_end", (thoughts) => this.emitEvent("reasoning_end", thoughts));
+
+                    const result = await subagent.invoke();
+
+                    this.calculateUsedTokens({ tokens: subagent.usedTokens } as LLMAnswer);
+
+                    const newMessages = result.messages.slice(this.agentConfig.messages.length);
+
+                    this.agentConfig.messages = [
+                        ...this.agentConfig.messages,
+                        ...newMessages
+                    ];
+
                     return {
+                        callNode: "main_node",
                         stateUpdate: state
                     };
                 });
@@ -550,11 +571,37 @@ export class ReActAgent<Skills extends SchemaSkillStore, Memory extends SchemaMe
         const maxRecalls = this.getMaximumReasoningRecalls();
         const recallBoundary = `You can request at most ${maxRecalls} internal self-recalls in this run.`;
 
-        if (!cleanedUserPrompt.length) {
-            return `${REACT_SYSTEM_PROMPT}\n${recallBoundary}`;
+        let baseSystemPrompt = REACT_SYSTEM_PROMPT;
+
+        if (this.agentSkillsInterface) {
+            baseSystemPrompt += `\n\n## Explore your skills and use them according to this specification:\n${SkillsInterface.exploreSkillsPrompt}`;
+            baseSystemPrompt += `\n\n## Execute skill scripts and CLI commands according to this specification:\n${SkillsInterface.executeSkillScriptsPrompt}`;
+            baseSystemPrompt += `\n\n## Create and manage skills as needed according to this specification:\n${SkillsInterface.createSkillsPrompt}`;
         }
 
-        return `${REACT_SYSTEM_PROMPT}\n${recallBoundary}\n\nUser system prompt:\n${cleanedUserPrompt}`;
+        if (this.agentMemoryInterface) {
+            baseSystemPrompt += `\n\n\n\n## Memory and recall system:\n${MemoryInterface.memorySystemPrompt}\n\nYou've to remember following informations always when has occured in conversation transcript and were't already remembered:\n${this.agentMemoryInterface.store.config.hasToRemember}`;
+        }
+
+        if (this.agentConfig.hitl) {
+            baseSystemPrompt += `\n\nQuestioning of user. Use questioning tools accroding to this specification to ask user about whatever:\n${this.agentConfig.hitl.questionHITLPrompt}`;
+        }
+
+        if (this.agentConfig.subagents?.length) {
+            baseSystemPrompt += "\n\n## Subagents available:\n";
+            baseSystemPrompt += "You can delegate tasks to specialized subagents. To call a subagent, reply ONLY with:\n";
+            baseSystemPrompt += `  [[RAVEN_CALL_SUBAGENT]] <Role> | <Detailed instruction for the subagent>\n`;
+            baseSystemPrompt += "Available subagents:\n";
+            for (const agent of this.agentConfig.subagents) {
+                baseSystemPrompt += `- Role: "${agent.role}", Description: "${agent.roleDescription}"\n`;
+            }
+        }
+
+        if (!cleanedUserPrompt.length) {
+            return `${baseSystemPrompt}\n${recallBoundary}`;
+        }
+
+        return `${baseSystemPrompt}\n${recallBoundary}\n\nUser system prompt:\n${cleanedUserPrompt}`;
     }
 
     private getMaximumReasoningRecalls(): number {
@@ -569,6 +616,53 @@ export class ReActAgent<Skills extends SchemaSkillStore, Memory extends SchemaMe
         }
 
         return Math.floor(configuredValue);
+    }
+
+    private parseSubagentInstruction(answer: ReActAgentInvokeResult["messages"]): { role: string; instruction: string } | null {
+        const latestAIMessage = [...answer]
+            .reverse()
+            .find((message): message is Extract<MessagesVariations, { type: "ai" }> => message.type === "ai" && !!message.content?.trim());
+
+        if (!latestAIMessage?.content) {
+            return null;
+        }
+
+        const trimmedContent = latestAIMessage.content.trim();
+        const prefix = "[[RAVEN_CALL_SUBAGENT]]";
+
+        if (!trimmedContent.startsWith(prefix)) {
+            return null;
+        }
+
+        const remainder = trimmedContent.slice(prefix.length).trim();
+        const separatorIndex = remainder.indexOf("|");
+        
+        if (separatorIndex === -1) {
+            return null;
+        }
+
+        const role = remainder.slice(0, separatorIndex).trim();
+        const instruction = remainder.slice(separatorIndex + 1).trim();
+
+        if (!role || !instruction) {
+            return null;
+        }
+
+        return { role, instruction };
+    }
+
+    private stripSubagentDirectiveFromTail(): void {
+        const lastMessage = this.agentConfig.messages.at(-1);
+
+        if (lastMessage?.type !== "ai" || !lastMessage.content?.trim()) {
+            return;
+        }
+
+        if (!lastMessage.content.trim().startsWith("[[RAVEN_CALL_SUBAGENT]]")) {
+            return;
+        }
+
+        this.agentConfig.messages = this.agentConfig.messages.slice(0, -1);
     }
 
     // Detect explicit internal recall command returned by the model.
