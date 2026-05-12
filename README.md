@@ -5,7 +5,7 @@ Open source Agent Developement Kit ***made to support wild AI-Agents Developemen
 Use graph with this style to make your own workflow
 
 ```typescript
-import { Graph, GraphMarkers } from "raven-adk";
+import { Graph, GraphMarkers } from "raven-adk/graph";
 
 const graphState = { invokeTimes: 0 };
 const graph = new Graph(graphState);
@@ -74,7 +74,7 @@ This is how to create ReAct agent
     import { tool } from "raven-adk/tools";
     import { OpenAI, Anthropic } from "raven-adk/models";
     import * as z from "zod";
-    import { MongoDBSkillStore, SkillDiskStore } from "raven-adk/skills/store";
+    import { SkillMongoDBStore, SkillDiskStore } from "raven-adk/skills/store";
     import { MemoryChromaDBStore } from "raven-adk/memory/store";
     import { HITLSocketIo } from "raven-adk/tools/hitl";
 
@@ -145,7 +145,7 @@ This is how to create ReAct agent
             
         ],
         // Optional skills for agent — MongoDB-backed example
-        // The MongoDBSkillStore expects a `collection` object that implements the
+        // The SkillMongoDBStore expects a `collection` object that implements the
         // minimal Collection-like API used by the store (methods like `find`,
         // `findOne`, `insertOne`, `updateOne` and optional `deleteMany`/`deleteOne`).
         // Use the official `mongodb` driver and pass the `Collection` instance.
@@ -158,7 +158,7 @@ This is how to create ReAct agent
         // const skillsCollection = db.collection('skills');
         //
         // Then pass `skillsCollection` into the store configuration:
-        skills: new MongoDBSkillStore({
+        skills: new SkillMongoDBStore({
             collection: skillsCollection, // a MongoDB Collection instance
             root: 'skills', // optional prefix used inside the store documents
             dynamicSkillCreation: true,

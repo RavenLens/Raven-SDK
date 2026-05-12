@@ -7,7 +7,7 @@ import { Memory as MemoryInterface } from "./memory/memory";
 import { SchemaSkillStore } from "./skills/stores/schema";
 import { AgentMessagesGraphState, MessagesVariations } from "./state";
 import { Skills as SkillsInterface } from "./skills/skills";
-import { MCPTool } from "./tools/mcpTools";
+import { MCPTool } from "./tools/mcp/mcpTools";
 import { Tool } from "./tools/tools";
 import { HITLSocketIo } from "./tools/hitl/trasnports/SocketIoHITLTrasnport";
 import { RunPod } from "../models/runpod";
@@ -15,12 +15,12 @@ import z from "zod";
 
 type AgentModel = OpenAI | Anthropic | RunPod;
 
-type SubAgent = Pick<ReActAgentConfig<any, any>, "model" | "systemPrompt" | "tools"> & {
+export type SubAgent = Pick<ReActAgentConfig<any, any>, "model" | "systemPrompt" | "tools"> & {
     role: string;
     roleDescription: string;
 }
 
-interface ReActAgentConfig<Skills extends SchemaSkillStore, Memory extends SchemaMemoryStore> {
+export interface ReActAgentConfig<Skills extends SchemaSkillStore, Memory extends SchemaMemoryStore> {
     model: AgentModel;
     systemPrompt: string;
     messages: MessagesVariations[];

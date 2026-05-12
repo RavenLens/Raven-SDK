@@ -1,6 +1,6 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { SSEClientTransport, type SSEClientTransportOptions } from "@modelcontextprotocol/sdk/client/sse.js";
-import { StdioClientTransport, type StdioServerParameters } from "@modelcontextprotocol/sdk/client/stdio.js";
+import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
+import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import {
     StreamableHTTPClientTransport,
     type StreamableHTTPClientTransportOptions
@@ -8,53 +8,8 @@ import {
 import { WebSocketClientTransport } from "@modelcontextprotocol/sdk/client/websocket.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import * as z from "zod";
-import { Tool } from "./tools";
-
-export type MCPServerTransport =
-    | {
-        protocol: "stdio" | "ipc";
-        command: string;
-        args?: string[];
-        env?: Record<string, string>;
-        cwd?: string;
-        stderr?: StdioServerParameters["stderr"];
-    }
-    | {
-        protocol: "sse";
-        url: string;
-        options?: SSEClientTransportOptions;
-    }
-    | {
-        protocol: "streamable-http" | "http";
-        url: string;
-        options?: StreamableHTTPClientTransportOptions;
-    }
-    | {
-        protocol: "websocket" | "ws" | "wss";
-        url: string;
-    };
-
-export interface MCPServerConfig {
-    serverId: string;
-    serverName?: string;
-    transport: MCPServerTransport;
-}
-
-export interface MCPClientConfig {
-    clientName?: string;
-    clientVersion?: string;
-    toolNameDelimiter?: string;
-}
-
-export interface MCPDownloadedTool {
-    serverId: string;
-    serverName?: string;
-    remoteToolName: string;
-    agentToolName: string;
-    description: string;
-    inputSchema: Record<string, unknown>;
-    outputSchema?: Record<string, unknown>;
-}
+import { Tool } from "../tools";
+import { MCPClientConfig, MCPDownloadedTool, MCPServerConfig, MCPServerTransport } from "./types";
 
 interface MCPServerSession {
     config: MCPServerConfig;

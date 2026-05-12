@@ -26,7 +26,7 @@ interface MongoSkillCollection {
 	deleteOne?(filter: Record<string, unknown>): Promise<unknown>;
 }
 
-type MongoDBSkillStoreConfig = SchemaSkillStore["config"] & {
+type SkillMongoDBStoreConfig = SchemaSkillStore["config"] & {
 	collection: MongoSkillCollection;
 	/** Optional skill root prefix in MongoDB storage (for example: "skills"). */
 	root?: string;
@@ -36,10 +36,10 @@ type SkillStoreEntry = SkillFolderEntry | SkillFileEntry;
 
 const SKILL_FILE_NAME = "SKILL.md";
 
-export class MongoDBSkillStore implements SchemaSkillStore {
-	config: MongoDBSkillStoreConfig;
+export class SkillMongoDBStore implements SchemaSkillStore {
+	config: SkillMongoDBStoreConfig;
 
-	constructor(config: MongoDBSkillStoreConfig) {
+	constructor(config: SkillMongoDBStoreConfig) {
 		this.config = {
 			...config,
 			dynamicSkillRemoval: config.dynamicSkillRemoval ?? false,

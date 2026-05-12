@@ -24,6 +24,48 @@
     "url": "https://github.com/RavenLens/Raven-SDK/issues"
   },
   "homepage": "https://github.com/RavenLens/Raven-SDK#readme",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "require": "./dist/index.js"
+    },
+    "./graph": {
+      "import": "./dist/graph/index.js",
+      "require": "./dist/graph/index.js"
+    },
+    "./agents": {
+      "import": "./dist/agent/index.js",
+      "require": "./dist/agent/index.js"
+    },
+    "./models": {
+      "import": "./dist/models/index.js",
+      "require": "./dist/models/index.js"
+    },
+    "./tools": {
+      "import": "./dist/agent/tools/index.js",
+      "require": "./dist/agent/tools/index.js"
+    },
+    "./tools/mcp": {
+      "import": "./dist/agent/tools/mcp/index.js",
+      "require": "./dist/agent/tools/mcp/index.js"
+    },
+    "./tools/mcp/types": {
+      "import": "./dist/agent/tools/mcp/types.js",
+      "require": "./dist/agent/tools/mcp/types.js"
+    },
+    "./tools/hitl": {
+      "import": "./dist/agent/tools/hitl/index.js",
+      "require": "./dist/agent/tools/hitl/index.js"
+    },
+    "./skills/store": {
+      "import": "./dist/agent/skills/stores/index.js",
+      "require": "./dist/agent/skills/stores/index.js"
+    },
+    "./memory/store": {
+      "import": "./dist/agent/memory/stores/index.js",
+      "require": "./dist/agent/memory/stores/index.js"
+    }
+  },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.94.0",
     "@modelcontextprotocol/sdk": "^1.29.0",

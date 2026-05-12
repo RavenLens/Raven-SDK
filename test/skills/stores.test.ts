@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { MongoDBSkillStore } from "../../src/agent/skills/stores/mongodbStore";
+import { SkillMongoDBStore } from "../../src/agent/skills/stores/mongodbStore";
 import { SkillDiskStore } from "../../src/agent/skills/stores/diskStore";
 
 describe("SkillDiskStore.removeSkill", () => {
@@ -85,7 +85,7 @@ describe("SkillDiskStore.removeSkillFolder", () => {
     });
 });
 
-describe("MongoDBSkillStore.removeSkill", () => {
+describe("SkillMongoDBStore.removeSkill", () => {
     it("deletes a skill subtree when removal is enabled", async () => {
         const documents = [
             { kind: "folder", location: "skills/session-a/alpha", type: "skill", folderName: "alpha", parentLocation: "skills/session-a" },
@@ -116,7 +116,7 @@ describe("MongoDBSkillStore.removeSkill", () => {
             }
         };
 
-        const store = new MongoDBSkillStore({
+        const store = new SkillMongoDBStore({
             collection,
             root: "skills",
             session: "session-a",
@@ -145,7 +145,7 @@ describe("MongoDBSkillStore.removeSkill", () => {
             }
         };
 
-        const store = new MongoDBSkillStore({
+        const store = new SkillMongoDBStore({
             collection,
             root: "skills",
             session: "session-b",
@@ -157,7 +157,7 @@ describe("MongoDBSkillStore.removeSkill", () => {
     });
 });
 
-describe("MongoDBSkillStore.createSkillFolder", () => {
+describe("SkillMongoDBStore.createSkillFolder", () => {
     it("creates a folder document when removal is enabled", async () => {
         const documents: Array<Record<string, unknown>> = [];
 
@@ -171,7 +171,7 @@ describe("MongoDBSkillStore.createSkillFolder", () => {
             updateOne: async () => ({ acknowledged: true })
         };
 
-        const store = new MongoDBSkillStore({
+        const store = new SkillMongoDBStore({
             collection,
             root: "skills",
             session: "session-c",
@@ -191,7 +191,7 @@ describe("MongoDBSkillStore.createSkillFolder", () => {
     });
 });
 
-describe("MongoDBSkillStore.removeSkillFolder", () => {
+describe("SkillMongoDBStore.removeSkillFolder", () => {
     it("deletes a folder subtree when removal is enabled", async () => {
         const documents = [
             { kind: "folder", location: "skills/session-d/ward-b", type: "skill-ward", folderName: "ward-b", parentLocation: "skills/session-d" },
@@ -220,7 +220,7 @@ describe("MongoDBSkillStore.removeSkillFolder", () => {
             }
         };
 
-        const store = new MongoDBSkillStore({
+        const store = new SkillMongoDBStore({
             collection,
             root: "skills",
             session: "session-d",

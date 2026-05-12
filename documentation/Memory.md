@@ -10,7 +10,7 @@ Finally you've full agency to decide what agent has to remember, what should so 
 ```typescript
     import { ReActAgent } from "raven-adk/agents";
     import { tool } from "raven-adk/tools";
-    import { MongoDBSkillStore, SkillDiskStore } from "raven-adk/skills/store";
+    import { SkillMongoDBStore, SkillDiskStore } from "raven-adk/skills/store";
     import { MemoryChromaDBStore } from "raven-adk/memory/store";
 
     const reactAgent = new ReActAgent({
@@ -47,7 +47,7 @@ Finally you've full agency to decide what agent has to remember, what should so 
             )
         ],
         // Optional skills for agent — MongoDB-backed example
-        // The MongoDBSkillStore expects a `collection` object that implements the
+        // The SkillMongoDBStore expects a `collection` object that implements the
         // minimal Collection-like API used by the store (methods like `find`,
         // `findOne`, `insertOne`, `updateOne` and optional `deleteMany`/`deleteOne`).
         // Use the official `mongodb` driver and pass the `Collection` instance.
@@ -60,7 +60,7 @@ Finally you've full agency to decide what agent has to remember, what should so 
         // const skillsCollection = db.collection('skills');
         //
         // Then pass `skillsCollection` into the store configuration:
-        skills: new MongoDBSkillStore({
+        skills: new SkillMongoDBStore({
             collection: skillsCollection, // a MongoDB Collection instance
             root: 'skills', // optional prefix used inside the store documents
             dynamicSkillCreation: true,
@@ -103,6 +103,6 @@ This subsection describe how the agent memory work.
 
 ### Built-In Stores
 - Local disk store: [`SkillDiskStore`](./src/agent/skills/stores/diskStore.ts)
-- MongoDB store: [`MongoDBSkillStore`](./src/agent/skills/stores/mongodbStore.ts)
+- MongoDB store: [`SkillMongoDBStore`](./src/agent/skills/stores/mongodbStore.ts)
 
 You can also build custom stores by implementing [`SchemaSkillStore`](./src/agent/skills/stores/schema.ts).

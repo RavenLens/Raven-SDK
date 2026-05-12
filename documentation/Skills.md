@@ -47,7 +47,7 @@ All skill stores should follow [`SchemaSkillStore`](./src/agent/skills/stores/sc
 
 ### Built-In Stores
 - Local disk store: [`SkillDiskStore`](./src/agent/skills/stores/diskStore.ts)
-- MongoDB store: [`MongoDBSkillStore`](./src/agent/skills/stores/mongodbStore.ts)
+- MongoDB store: [`SkillMongoDBStore`](./src/agent/skills/stores/mongodbStore.ts)
 
 You can also build custom stores by implementing [`SchemaSkillStore`](./src/agent/skills/stores/schema.ts).
 
